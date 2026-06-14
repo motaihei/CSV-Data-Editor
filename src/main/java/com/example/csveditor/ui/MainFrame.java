@@ -7,6 +7,7 @@ import com.example.csveditor.service.CsvDataScanService;
 
 import javax.swing.JButton;
 import javax.swing.AbstractAction;
+import javax.swing.Box;
 import javax.swing.JComponent;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
@@ -45,11 +46,13 @@ import java.util.prefs.Preferences;
 public class MainFrame extends JFrame {
 
     private final CsvDataTreePanel treePanel;
+    private final DataGroupListPanel dataGroupListPanel;
     private final CsvStackPanel csvStackPanel;
     private final StatusBar statusBar;
     private final CsvDataScanService scanService;
     private final CsvDocumentService documentService;
     private final Preferences preferences;
+    private JSplitPane leftSplitPane;
     private JTextField columnWidthField;
     private Path rootDirectory;
     private boolean restoringSession;
@@ -58,15 +61,21 @@ public class MainFrame extends JFrame {
     private static final String SESSION_ROOT_FOLDER_KEY = "sessionRootFolder";
     private static final String SESSION_OPEN_FILES_KEY = "sessionOpenFiles";
     private static final String SESSION_COLLAPSED_GROUPS_KEY = "sessionCollapsedGroups";
+    private static final String SESSION_DATA_GROUPING_ENABLED_KEY = "sessionDataGroupingEnabled";
+    private static final String DATA_GROUPING_ENABLED_KEY = "dataGroupingEnabled";
+    private static final String GROUPED_MODE_SUFFIX = ".grouped";
+    private static final String FLAT_MODE_SUFFIX = ".flat";
 
     public MainFrame() {
         super("CSV Data Editor");
         this.scanService = new CsvDataScanService();
         this.documentService = new CsvDocumentService();
         this.treePanel = new CsvDataTreePanel();
+        this.dataGroupListPanel = new DataGroupListPanel();
         this.csvStackPanel = new CsvStackPanel(documentService);
         this.statusBar = new StatusBar();
         this.preferences = Preferences.userNodeForPackage(MainFrame.class);
+        this.csvStackPanel.setDataGroupingEnabled(preferences.getBoolean(DATA_GROUPING_ENABLED_KEY, true));
         buildUi();
         installListeners();
         installGlobalKeyBindings();
@@ -83,9 +92,14 @@ public class MainFrame extends JFrame {
         setJMenuBar(createMenuBar());
         add(createToolBar(), BorderLayout.NORTH);
 
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, treePanel, csvStackPanel);
+        leftSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, treePanel, dataGroupListPanel);
+        leftSplitPane.setResizeWeight(0.0);
+        leftSplitPane.setDividerLocation(300);
+        updateDataGroupListVisibility();
+
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftSplitPane, csvStackPanel);
         splitPane.setResizeWeight(0.0);
-        splitPane.setDividerLocation(300);
+        splitPane.setDividerLocation(474);
         add(splitPane, BorderLayout.CENTER);
         add(statusBar, BorderLayout.SOUTH);
 
@@ -110,6 +124,10 @@ public class MainFrame extends JFrame {
         saveAllItem.addActionListener(e -> saveAll());
         fileMenu.add(saveAllItem);
 
+        JMenuItem settingsItem = new JMenuItem("Settings...");
+        settingsItem.addActionListener(e -> showSettingsDialog());
+        fileMenu.add(settingsItem);
+
         fileMenu.addSeparator();
         JMenuItem exitItem = new JMenuItem("Exit");
         exitItem.addActionListener(e -> closeWindow());
@@ -131,7 +149,8 @@ public class MainFrame extends JFrame {
         saveAllButton.addActionListener(e -> saveAll());
         toolBar.add(saveAllButton);
 
-        toolBar.addSeparator();
+        toolBar.add(Box.createHorizontalGlue());
+
         columnWidthField = new JTextField("110");
         Dimension columnWidthFieldSize = new Dimension(48, 24);
         columnWidthField.setPreferredSize(columnWidthFieldSize);
@@ -151,6 +170,15 @@ public class MainFrame extends JFrame {
         autoFitColumnWidthButton.addActionListener(e -> autoFitColumnWidthsForOpenTables());
         toolBar.add(autoFitColumnWidthButton);
 
+        JButton closeAllCsvButton = new JButton("すべて閉じる");
+        closeAllCsvButton.setToolTipText("表示中のCSVパネルをすべて閉じます。");
+        closeAllCsvButton.addActionListener(e -> closeAllOpenCsvPanels());
+        toolBar.add(closeAllCsvButton);
+
+        JButton settingsButton = new JButton("設定");
+        settingsButton.addActionListener(e -> showSettingsDialog());
+        toolBar.add(settingsButton);
+
         return toolBar;
     }
 
@@ -160,13 +188,31 @@ public class MainFrame extends JFrame {
             public void csvOpenRequested(DataNode node) {
                 openCsv(node);
             }
+
+            @Override
+            public void csvOpenRequested(List<DataNode> nodes) {
+                openCsvFiles(nodes);
+            }
         });
         csvStackPanel.setSessionChangeListener(new CsvStackPanel.SessionChangeListener() {
             @Override
             public void sessionChanged() {
+                updateOpenGroupList();
                 if (!restoringSession && !suppressSessionSaving) {
                     saveOpenSession();
                 }
+            }
+        });
+        dataGroupListPanel.setGroupSelectionListener(new DataGroupListPanel.GroupSelectionListener() {
+            @Override
+            public void groupSelected(String groupKey) {
+                csvStackPanel.focusGroup(groupKey);
+            }
+        });
+        dataGroupListPanel.setGroupCloseListener(new DataGroupListPanel.GroupCloseListener() {
+            @Override
+            public void groupCloseRequested(String groupKey) {
+                csvStackPanel.requestCloseGroup(groupKey);
             }
         });
 
@@ -262,8 +308,12 @@ public class MainFrame extends JFrame {
             return;
         }
         preferences.put(SESSION_ROOT_FOLDER_KEY, rootDirectory.toAbsolutePath().normalize().toString());
-        preferences.put(SESSION_OPEN_FILES_KEY, joinLines(csvStackPanel.getOpenRelativePaths()));
-        preferences.put(SESSION_COLLAPSED_GROUPS_KEY, joinLines(new ArrayList<String>(csvStackPanel.getCollapsedGroupKeys())));
+        boolean dataGroupingEnabled = csvStackPanel.isDataGroupingEnabled();
+        preferences.put(modeSessionKey(SESSION_OPEN_FILES_KEY, dataGroupingEnabled),
+                joinLines(csvStackPanel.getOpenRelativePaths()));
+        preferences.put(modeSessionKey(SESSION_COLLAPSED_GROUPS_KEY, dataGroupingEnabled),
+                joinLines(new ArrayList<String>(csvStackPanel.getCollapsedGroupKeys())));
+        preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, csvStackPanel.isDataGroupingEnabled());
     }
 
     private void restoreOpenSession(final Path selectedRoot) {
@@ -271,9 +321,16 @@ public class MainFrame extends JFrame {
         if (sessionRoot == null || !selectedRoot.toString().equals(Paths.get(sessionRoot).toAbsolutePath().normalize().toString())) {
             return;
         }
-        final List<String> relativePaths = splitLines(preferences.get(SESSION_OPEN_FILES_KEY, ""));
-        final Set<String> collapsedGroups = new HashSet<String>(splitLines(preferences.get(SESSION_COLLAPSED_GROUPS_KEY, "")));
+        final boolean sessionDataGroupingEnabled = preferences.getBoolean(
+                SESSION_DATA_GROUPING_ENABLED_KEY,
+                preferences.getBoolean(DATA_GROUPING_ENABLED_KEY, true));
+        final List<String> relativePaths = splitLines(getModeSessionValue(
+                SESSION_OPEN_FILES_KEY, sessionDataGroupingEnabled));
+        final Set<String> collapsedGroups = new HashSet<String>(splitLines(getModeSessionValue(
+                SESSION_COLLAPSED_GROUPS_KEY, sessionDataGroupingEnabled)));
         if (relativePaths.isEmpty() && collapsedGroups.isEmpty()) {
+            csvStackPanel.setDataGroupingEnabled(sessionDataGroupingEnabled);
+            updateOpenGroupList();
             return;
         }
         statusBar.showLoading("Restoring previous open CSV files...");
@@ -303,11 +360,13 @@ public class MainFrame extends JFrame {
                 setCursor(Cursor.getDefaultCursor());
                 restoringSession = true;
                 try {
+                    csvStackPanel.setDataGroupingEnabled(sessionDataGroupingEnabled);
                     csvStackPanel.setCollapsedGroupKeys(collapsedGroups);
                     for (CsvDocument document : get()) {
                         csvStackPanel.addOrFocusDocument(document);
                     }
                     csvStackPanel.setCollapsedGroupKeys(collapsedGroups);
+                    updateOpenGroupList();
                     statusBar.setMessage("Restored previous open CSV files.");
                 } catch (Exception ex) {
                     statusBar.showError(ex.getMessage());
@@ -382,6 +441,80 @@ public class MainFrame extends JFrame {
         worker.execute();
     }
 
+    private void openCsvFiles(List<DataNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return;
+        }
+        for (DataNode node : nodes) {
+            openCsv(node);
+        }
+    }
+
+    private void updateOpenGroupList() {
+        updateDataGroupListVisibility();
+        dataGroupListPanel.setGroupKeys(csvStackPanel.getOpenGroupKeys());
+    }
+
+    private void updateDataGroupListVisibility() {
+        if (leftSplitPane == null) {
+            return;
+        }
+        boolean visible = csvStackPanel.isDataGroupingEnabled();
+        dataGroupListPanel.setVisible(visible);
+        leftSplitPane.setDividerSize(visible ? 10 : 0);
+        leftSplitPane.setDividerLocation(visible ? 300 : 0);
+        leftSplitPane.revalidate();
+        leftSplitPane.repaint();
+    }
+
+    private void showSettingsDialog() {
+        SettingsDialog dialog = new SettingsDialog(this, csvStackPanel.isDataGroupingEnabled(),
+                new SettingsDialog.SettingsApplyListener() {
+                    @Override
+                    public boolean settingsApplied(boolean dataGroupingEnabled) {
+                        return applyDataGroupingSetting(dataGroupingEnabled);
+                    }
+                });
+        dialog.setVisible(true);
+    }
+
+    private boolean applyDataGroupingSetting(boolean dataGroupingEnabled) {
+        if (csvStackPanel.isDataGroupingEnabled() == dataGroupingEnabled) {
+            preferences.putBoolean(DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+            preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+            saveOpenSession();
+            return true;
+        }
+
+        saveOpenSession();
+        boolean previousSuppressSessionSaving = suppressSessionSaving;
+        suppressSessionSaving = true;
+        try {
+            if (!csvStackPanel.requestCloseAll()) {
+                return false;
+            }
+            preferences.putBoolean(DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+            preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+            csvStackPanel.setDataGroupingEnabled(dataGroupingEnabled);
+            updateOpenGroupList();
+        } finally {
+            suppressSessionSaving = previousSuppressSessionSaving;
+        }
+
+        if (rootDirectory != null) {
+            restoreOpenSession(rootDirectory);
+        }
+        return true;
+    }
+
+    private String getModeSessionValue(String baseKey, boolean dataGroupingEnabled) {
+        return preferences.get(modeSessionKey(baseKey, dataGroupingEnabled), "");
+    }
+
+    private static String modeSessionKey(String baseKey, boolean dataGroupingEnabled) {
+        return baseKey + (dataGroupingEnabled ? GROUPED_MODE_SUFFIX : FLAT_MODE_SUFFIX);
+    }
+
     private void saveAll() {
         statusBar.showSaving("Saving all open CSV files...");
         try {
@@ -419,6 +552,14 @@ public class MainFrame extends JFrame {
     private void autoFitColumnWidthsForOpenTables() {
         csvStackPanel.autoFitColumnWidthsForOpenPanels();
         statusBar.setMessage("Auto-fitted column widths for open CSV tables.");
+    }
+
+    private void closeAllOpenCsvPanels() {
+        if (csvStackPanel.requestCloseAll()) {
+            saveOpenSession();
+            updateOpenGroupList();
+            statusBar.setMessage("Closed all open CSV panels.");
+        }
     }
 
     private void closeWindow() {

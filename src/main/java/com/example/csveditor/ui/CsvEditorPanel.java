@@ -24,6 +24,8 @@ import javax.swing.table.JTableHeader;
 import javax.swing.table.TableColumn;
 import javax.swing.event.TableModelEvent;
 import javax.swing.event.TableModelListener;
+import javax.swing.event.ListSelectionEvent;
+import javax.swing.event.ListSelectionListener;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -71,6 +73,10 @@ public final class CsvEditorPanel extends JPanel {
         void moveDownRequested(CsvEditorPanel panel);
     }
 
+    public interface TableSelectionListener {
+        void tableSelectionChanged(CsvEditorPanel panel);
+    }
+
     private final CsvDocumentService documentService;
     private static final int MAX_UNDO_HISTORY = 5;
     private static final Color DIRTY_BACKGROUND = new Color(255, 250, 218);
@@ -91,9 +97,11 @@ public final class CsvEditorPanel extends JPanel {
     private JLabel pathLabel;
     private JLabel summaryLabel;
     private JLabel dirtyLabel;
+    private JPanel csvContentPanel;
     private JPanel infoPanel;
     private JPanel titlePanel;
     private JPanel titleHeaderPanel;
+    private JPanel titleDetailsPanel;
     private JPanel actionsPanel;
     private JPanel tablePanel;
     private JPanel moveButtonsPanel;
@@ -106,7 +114,8 @@ public final class CsvEditorPanel extends JPanel {
     private JButton collapseButton;
     private CloseHandler closeHandler;
     private MoveRequestListener moveRequestListener;
-    private List<String> copiedRowValues;
+    private TableSelectionListener tableSelectionListener;
+    private List<List<String>> copiedRows;
     private int popupModelRow = -1;
     private List<List<String>> savedRowsSnapshot;
     private Deque<List<List<String>>> undoHistory = new ArrayDeque<List<List<String>>>();
@@ -116,6 +125,7 @@ public final class CsvEditorPanel extends JPanel {
     private boolean canMoveUp = true;
     private boolean canMoveDown = true;
     private boolean collapsed;
+    private boolean suppressSelectionNotification;
 
     public CsvEditorPanel(CsvDocument document, CsvDocumentService documentService) {
         if (document == null) {
@@ -167,6 +177,22 @@ public final class CsvEditorPanel extends JPanel {
 
     public void setMoveRequestListener(MoveRequestListener moveRequestListener) {
         this.moveRequestListener = moveRequestListener;
+    }
+
+    public void setTableSelectionListener(TableSelectionListener tableSelectionListener) {
+        this.tableSelectionListener = tableSelectionListener;
+    }
+
+    public void clearTableSelection() {
+        if (table == null) {
+            return;
+        }
+        suppressSelectionNotification = true;
+        try {
+            table.clearSelection();
+        } finally {
+            suppressSelectionNotification = false;
+        }
     }
 
     public void setMoveAvailability(boolean canMoveUp, boolean canMoveDown) {
@@ -260,6 +286,10 @@ public final class CsvEditorPanel extends JPanel {
         updateTableScrollPaneSize();
     }
 
+    public void refreshResponsiveTableSize() {
+        updateTableScrollPaneSize();
+    }
+
     private boolean reloadDocumentDiscardingChanges() {
         try {
             setBusy(true);
@@ -295,8 +325,11 @@ public final class CsvEditorPanel extends JPanel {
     }
 
     private void buildUi() {
-        setLayout(new BorderLayout(8, 0));
-        setBorder(BorderFactory.createCompoundBorder(
+        setLayout(new BorderLayout(2, 0));
+        setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+
+        csvContentPanel = new JPanel(new BorderLayout(2, 0));
+        csvContentPanel.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(190, 190, 190), 1),
                 BorderFactory.createEmptyBorder(4, 6, 4, 6)));
 
@@ -350,17 +383,33 @@ public final class CsvEditorPanel extends JPanel {
         });
         collapseButton.addActionListener(e -> toggleCollapsed());
 
-        infoPanel = new JPanel(new BorderLayout(4, 2));
-        infoPanel.setPreferredSize(new Dimension(320, 94));
-        infoPanel.setMinimumSize(new Dimension(310, 94));
+        moveButtonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        moveButtonsPanel.add(moveUpButton);
+        moveButtonsPanel.add(moveDownButton);
+        moveButtonsPanel.add(collapseButton);
+        moveButtonsPanel.setMaximumSize(new Dimension(120, 28));
+        moveButtonsPanel.setAlignmentY(Component.TOP_ALIGNMENT);
+        add(moveButtonsPanel, BorderLayout.WEST);
 
-        titleHeaderPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
-        titleHeaderPanel.add(collapseButton);
-        titleHeaderPanel.add(titleLabel);
-        titlePanel = new JPanel(new BorderLayout(2, 1));
+        infoPanel = new JPanel(new BorderLayout(4, 2));
+        infoPanel.setPreferredSize(new Dimension(330, 128));
+        infoPanel.setMinimumSize(new Dimension(280, 118));
+
+        titleHeaderPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        titleDetailsPanel = new JPanel();
+        titleDetailsPanel.setLayout(new BoxLayout(titleDetailsPanel, BoxLayout.Y_AXIS));
+        titleDetailsPanel.setOpaque(false);
+        titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        pathLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        summaryLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        titleDetailsPanel.add(titleLabel);
+        titleDetailsPanel.add(pathLabel);
+        titleDetailsPanel.add(summaryLabel);
+
+        titleHeaderPanel.setVisible(false);
+        titlePanel = new JPanel(new BorderLayout(2, 0));
         titlePanel.add(titleHeaderPanel, BorderLayout.NORTH);
-        titlePanel.add(pathLabel, BorderLayout.CENTER);
-        titlePanel.add(summaryLabel, BorderLayout.SOUTH);
+        titlePanel.add(titleDetailsPanel, BorderLayout.CENTER);
         infoPanel.add(titlePanel, BorderLayout.NORTH);
 
         actionsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
@@ -370,7 +419,7 @@ public final class CsvEditorPanel extends JPanel {
         actionsPanel.add(closeButton);
         actionsPanel.add(openFolderButton);
         infoPanel.add(actionsPanel, BorderLayout.SOUTH);
-        add(infoPanel, BorderLayout.WEST);
+        csvContentPanel.add(infoPanel, BorderLayout.WEST);
 
         tableModel = new CsvTableModel(document);
         attachUndoListener(tableModel);
@@ -387,6 +436,7 @@ public final class CsvEditorPanel extends JPanel {
         configureTableColumns();
         installHeaderAutoResizeHandler();
         installRowPopupMenu();
+        installTableSelectionNotification();
         installEditorKeyBindings();
 
         tableScrollPane = new JScrollPane(table);
@@ -398,27 +448,42 @@ public final class CsvEditorPanel extends JPanel {
         tableWidth = calculateAutomaticTableWidth();
         tableHeight = calculateAutomaticTableHeight();
         updateTableScrollPaneSize();
-        moveButtonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
-        moveButtonsPanel.add(moveUpButton);
-        moveButtonsPanel.add(moveDownButton);
-        moveButtonsPanel.setMaximumSize(new Dimension(64, 24));
-        moveButtonsPanel.setAlignmentY(Component.TOP_ALIGNMENT);
         tableScrollPane.setAlignmentY(Component.TOP_ALIGNMENT);
 
         tablePanel = new JPanel();
         tablePanel.setLayout(new BoxLayout(tablePanel, BoxLayout.X_AXIS));
-        tablePanel.add(moveButtonsPanel);
         tablePanel.add(tableScrollPane);
         updateTablePanelSize();
-        add(tablePanel, BorderLayout.CENTER);
+        csvContentPanel.add(tablePanel, BorderLayout.CENTER);
+        add(csvContentPanel, BorderLayout.CENTER);
+        csvContentPanel.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent event) {
+                updateTableScrollPaneSize();
+            }
+        });
         installResponsiveTableResizeHandler();
+    }
+
+    private void installTableSelectionNotification() {
+        table.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
+            @Override
+            public void valueChanged(ListSelectionEvent event) {
+                if (event.getValueIsAdjusting() || suppressSelectionNotification || tableSelectionListener == null) {
+                    return;
+                }
+                if (table.getSelectedRowCount() > 0) {
+                    tableSelectionListener.tableSelectionChanged(CsvEditorPanel.this);
+                }
+            }
+        });
     }
 
     private void installRowPopupMenu() {
         final JPopupMenu popupMenu = new JPopupMenu();
-        JMenuItem insertRowItem = new JMenuItem("行挿入");
+        JMenuItem insertRowItem = new JMenuItem("空白行挿入");
         JMenuItem copyRowItem = new JMenuItem("行コピー");
-        JMenuItem pasteRowItem = new JMenuItem("行貼り付け");
+        JMenuItem pasteRowItem = new JMenuItem("コピー行貼付け");
         JMenuItem insertCopiedRowItem = new JMenuItem("コピー行を挿入");
         JMenuItem deleteRowItem = new JMenuItem("行削除");
         insertRowItem.addActionListener(e -> insertBlankRowAbovePopupRow());
@@ -457,8 +522,8 @@ public final class CsvEditorPanel extends JPanel {
                     table.setRowSelectionInterval(row, row);
                 }
                 popupModelRow = table.convertRowIndexToModel(row);
-                pasteRowItem.setEnabled(copiedRowValues != null);
-                insertCopiedRowItem.setEnabled(copiedRowValues != null);
+                pasteRowItem.setEnabled(copiedRows != null && !copiedRows.isEmpty());
+                insertCopiedRowItem.setEnabled(copiedRows != null && !copiedRows.isEmpty());
                 table.requestFocusInWindow();
                 popupMenu.show(table, event.getX(), event.getY());
             }
@@ -469,30 +534,35 @@ public final class CsvEditorPanel extends JPanel {
         if (popupModelRow < 0 || popupModelRow >= tableModel.getRowCount()) {
             return;
         }
-        copiedRowValues = new ArrayList<String>(tableModel.copyRow(popupModelRow));
+        copiedRows = copySelectedModelRows();
     }
 
     private void pasteCopiedRowToPopupRow() {
-        if (copiedRowValues == null || popupModelRow < 0 || popupModelRow >= tableModel.getRowCount()) {
+        if (copiedRows == null || copiedRows.isEmpty()
+                || popupModelRow < 0 || popupModelRow >= tableModel.getRowCount()) {
             return;
         }
         if (table.isEditing()) {
             table.getCellEditor().stopCellEditing();
         }
-        tableModel.replaceRow(popupModelRow, new ArrayList<String>(copiedRowValues));
+        int replaced = tableModel.replaceRows(popupModelRow, copyRows(copiedRows));
+        if (replaced <= 0) {
+            return;
+        }
         tableHeight = calculateAutomaticTableHeight();
         updateTableScrollPaneSize();
         updateLabels();
-        table.setRowSelectionInterval(popupModelRow, popupModelRow);
-        table.scrollRectToVisible(table.getCellRect(popupModelRow, 0, true));
+        table.setRowSelectionInterval(popupModelRow, popupModelRow + replaced - 1);
+        table.scrollRectToVisible(table.getCellRect(popupModelRow + replaced - 1, 0, true));
         table.requestFocusInWindow();
     }
 
     private void insertCopiedRowAbovePopupRow() {
-        if (copiedRowValues == null || popupModelRow < 0 || popupModelRow > tableModel.getRowCount()) {
+        if (copiedRows == null || copiedRows.isEmpty()
+                || popupModelRow < 0 || popupModelRow > tableModel.getRowCount()) {
             return;
         }
-        insertRowAt(popupModelRow, copiedRowValues);
+        insertRowsAt(popupModelRow, copiedRows);
     }
 
     private void insertBlankRowAbovePopupRow() {
@@ -537,6 +607,41 @@ public final class CsvEditorPanel extends JPanel {
         table.requestFocusInWindow();
     }
 
+    private void insertRowsAt(int rowIndex, List<List<String>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        if (table.isEditing()) {
+            table.getCellEditor().stopCellEditing();
+        }
+        tableModel.insertRows(rowIndex, copyRows(rows));
+        tableHeight = calculateAutomaticTableHeight();
+        updateTableScrollPaneSize();
+        updateLabels();
+        table.setRowSelectionInterval(rowIndex, rowIndex + rows.size() - 1);
+        table.scrollRectToVisible(table.getCellRect(rowIndex + rows.size() - 1, 0, true));
+        table.requestFocusInWindow();
+    }
+
+    private List<List<String>> copySelectedModelRows() {
+        int[] selectedRows = table.getSelectedRows();
+        if (selectedRows.length == 0) {
+            List<List<String>> rows = new ArrayList<List<String>>();
+            rows.add(new ArrayList<String>(tableModel.copyRow(popupModelRow)));
+            return rows;
+        }
+        int[] modelRows = new int[selectedRows.length];
+        for (int i = 0; i < selectedRows.length; i++) {
+            modelRows[i] = table.convertRowIndexToModel(selectedRows[i]);
+        }
+        java.util.Arrays.sort(modelRows);
+        List<List<String>> rows = new ArrayList<List<String>>();
+        for (int modelRow : modelRows) {
+            rows.add(new ArrayList<String>(tableModel.copyRow(modelRow)));
+        }
+        return rows;
+    }
+
     private int calculateTableViewportWidth() {
         int desiredWidth = calculateDesiredTableViewportWidth();
         int availableWidth = calculateAvailableTableViewportWidth();
@@ -563,15 +668,26 @@ public final class CsvEditorPanel extends JPanel {
     }
 
     private int calculateAvailableTableViewportWidth() {
-        if (getWidth() <= 0 || infoPanel == null) {
+        if (infoPanel == null) {
+            return 0;
+        }
+
+        int contentWidth = csvContentPanel == null ? 0 : csvContentPanel.getWidth();
+        if (contentWidth > 0) {
+            Insets contentInsets = csvContentPanel.getInsets();
+            int usedWidth = contentInsets.left + contentInsets.right + infoPanel.getPreferredSize().width + 2;
+            return contentWidth - usedWidth;
+        }
+
+        if (getWidth() <= 0) {
             return 0;
         }
         Insets insets = getInsets();
-        int usedWidth = insets.left + insets.right + infoPanel.getPreferredSize().width + 8;
+        int usedWidth = insets.left + insets.right + infoPanel.getPreferredSize().width + 2;
         if (moveButtonsPanel != null) {
-            usedWidth += moveButtonsPanel.getPreferredSize().width;
+            usedWidth += moveButtonsPanel.getPreferredSize().width + 2;
         }
-        return getWidth() - usedWidth - 8;
+        return getWidth() - usedWidth;
     }
 
     private void updateTableScrollPaneSize() {
@@ -593,6 +709,9 @@ public final class CsvEditorPanel extends JPanel {
         tableScrollPane.revalidate();
         tableScrollPane.repaint();
         updateTablePanelSize();
+        if (!collapsed) {
+            updateInfoPanelSize(height);
+        }
         revalidate();
         repaint();
         Container parent = getParent();
@@ -606,13 +725,10 @@ public final class CsvEditorPanel extends JPanel {
         if (tablePanel == null || tableScrollPane == null) {
             return;
         }
-        int moveButtonWidth = moveButtonsPanel == null ? 0 : moveButtonsPanel.getPreferredSize().width;
         int tablePaneWidth = collapsed ? 0 : tableScrollPane.getPreferredSize().width;
-        int panelWidth = moveButtonWidth + tablePaneWidth;
-        int panelMaxWidth = collapsed ? panelWidth : moveButtonWidth + calculateDesiredTableViewportWidth();
-        int panelHeight = Math.max(
-                moveButtonsPanel == null ? 0 : moveButtonsPanel.getPreferredSize().height,
-                collapsed ? 0 : tableScrollPane.getPreferredSize().height);
+        int panelWidth = tablePaneWidth;
+        int panelMaxWidth = collapsed ? panelWidth : calculateDesiredTableViewportWidth();
+        int panelHeight = collapsed ? 0 : tableScrollPane.getPreferredSize().height;
         Dimension panelSize = new Dimension(panelWidth, panelHeight);
         Dimension maxPanelSize = new Dimension(panelMaxWidth, panelHeight);
         tablePanel.setPreferredSize(panelSize);
@@ -635,6 +751,7 @@ public final class CsvEditorPanel extends JPanel {
         if (summaryLabel != null) {
             summaryLabel.setVisible(!collapsed);
         }
+        updateCollapsedTitleLayout();
         if (actionsPanel != null) {
             actionsPanel.setVisible(!collapsed);
         }
@@ -645,12 +762,10 @@ public final class CsvEditorPanel extends JPanel {
             tableScrollPane.setVisible(!collapsed);
         }
         if (infoPanel != null) {
-            Dimension size = collapsed ? new Dimension(320, 24) : new Dimension(320, 94);
-            Dimension minSize = collapsed ? new Dimension(310, 24) : new Dimension(310, 94);
-            infoPanel.setPreferredSize(size);
-            infoPanel.setMinimumSize(minSize);
+            updateInfoPanelSize(tableScrollPane == null ? 128 : tableScrollPane.getPreferredSize().height);
         }
         updateTablePanelSize();
+        setMaximumSize(new Dimension(Integer.MAX_VALUE, getPreferredSize().height));
         updateLabels();
         revalidate();
         repaint();
@@ -658,6 +773,51 @@ public final class CsvEditorPanel extends JPanel {
         if (parent != null) {
             parent.revalidate();
             parent.repaint();
+        }
+    }
+
+    private void updateInfoPanelSize(int referenceHeight) {
+        if (infoPanel == null) {
+            return;
+        }
+        int width = 330;
+        int minWidth = 280;
+        int height = collapsed ? 30 : Math.max(calculateMinimumInfoPanelHeight(), referenceHeight);
+        Dimension size = new Dimension(width, height);
+        Dimension minSize = new Dimension(minWidth, collapsed ? 30 : calculateMinimumInfoPanelHeight());
+        infoPanel.setPreferredSize(size);
+        infoPanel.setMinimumSize(minSize);
+    }
+
+    private int calculateMinimumInfoPanelHeight() {
+        int titleHeight = titlePanel == null ? 58 : titlePanel.getPreferredSize().height;
+        int actionHeight = actionsPanel == null ? 24 : actionsPanel.getPreferredSize().height;
+        return titleHeight + actionHeight + 8;
+    }
+
+    private void updateCollapsedTitleLayout() {
+        if (titleLabel == null || titleHeaderPanel == null || titleDetailsPanel == null) {
+            return;
+        }
+        Container currentParent = titleLabel.getParent();
+        if (collapsed) {
+            if (currentParent != titleHeaderPanel) {
+                if (currentParent != null) {
+                    currentParent.remove(titleLabel);
+                }
+                titleHeaderPanel.add(titleLabel);
+            }
+            titleHeaderPanel.setVisible(true);
+            titleDetailsPanel.setVisible(false);
+        } else {
+            if (currentParent != titleDetailsPanel) {
+                if (currentParent != null) {
+                    currentParent.remove(titleLabel);
+                }
+                titleDetailsPanel.add(titleLabel, 0);
+            }
+            titleHeaderPanel.setVisible(false);
+            titleDetailsPanel.setVisible(true);
         }
     }
 
@@ -790,12 +950,6 @@ public final class CsvEditorPanel extends JPanel {
         if (viewport != null) {
             installResizeHandler(viewport, resizeHandler);
         }
-        if (tableScrollPane.getHorizontalScrollBar() != null) {
-            installResizeHandler(tableScrollPane.getHorizontalScrollBar(), resizeHandler);
-        }
-        if (tableScrollPane.getVerticalScrollBar() != null) {
-            installResizeHandler(tableScrollPane.getVerticalScrollBar(), resizeHandler);
-        }
     }
 
     private void installResponsiveTableResizeHandler() {
@@ -883,11 +1037,27 @@ public final class CsvEditorPanel extends JPanel {
     }
 
     private boolean isNearBottomResizeEdge(Point point) {
-        return point != null && point.y >= tableScrollPane.getHeight() - 10;
+        if (point == null || tableScrollPane == null || tableScrollPane.getViewport() == null) {
+            return false;
+        }
+        Rectangle viewportBounds = tableScrollPane.getViewport().getBounds();
+        int viewportBottom = viewportBounds.y + viewportBounds.height;
+        return point.x >= viewportBounds.x
+                && point.x <= viewportBounds.x + viewportBounds.width
+                && point.y >= viewportBottom - 6
+                && point.y <= viewportBottom + 6;
     }
 
     private boolean isNearRightResizeEdge(Point point) {
-        return point != null && point.x >= tableScrollPane.getWidth() - 10;
+        if (point == null || tableScrollPane == null || tableScrollPane.getViewport() == null) {
+            return false;
+        }
+        Rectangle viewportBounds = tableScrollPane.getViewport().getBounds();
+        int viewportRight = viewportBounds.x + viewportBounds.width;
+        return point.y >= viewportBounds.y
+                && point.y <= viewportBounds.y + viewportBounds.height
+                && point.x >= viewportRight - 6
+                && point.x <= viewportRight + 6;
     }
 
     private Cursor getResizeCursor(Point point) {
@@ -1139,6 +1309,9 @@ public final class CsvEditorPanel extends JPanel {
     private void updatePanelBackground() {
         Color background = document.isDirty() ? DIRTY_BACKGROUND : getDefaultPanelBackground();
         setBackground(background);
+        if (csvContentPanel != null) {
+            csvContentPanel.setBackground(background);
+        }
         if (infoPanel != null) {
             infoPanel.setBackground(background);
         }
@@ -1147,6 +1320,9 @@ public final class CsvEditorPanel extends JPanel {
         }
         if (titleHeaderPanel != null) {
             titleHeaderPanel.setBackground(background);
+        }
+        if (titleDetailsPanel != null) {
+            titleDetailsPanel.setBackground(background);
         }
         if (actionsPanel != null) {
             actionsPanel.setBackground(background);

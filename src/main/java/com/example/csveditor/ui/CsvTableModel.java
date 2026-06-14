@@ -97,10 +97,34 @@ public final class CsvTableModel extends AbstractTableModel {
         fireTableRowsInserted(rowIndex, rowIndex);
     }
 
+    public void insertRows(int rowIndex, List<List<String>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        notifyBeforeDocumentChange();
+        for (int i = 0; i < rows.size(); i++) {
+            document.insertRow(rowIndex + i, rows.get(i));
+        }
+        fireTableRowsInserted(rowIndex, rowIndex + rows.size() - 1);
+    }
+
     public void replaceRow(int rowIndex, List<String> values) {
         notifyBeforeDocumentChange();
         document.replaceRow(rowIndex, values);
         fireTableRowsUpdated(rowIndex, rowIndex);
+    }
+
+    public int replaceRows(int rowIndex, List<List<String>> rows) {
+        if (rows == null || rows.isEmpty() || rowIndex < 0 || rowIndex >= document.getRowCount()) {
+            return 0;
+        }
+        notifyBeforeDocumentChange();
+        int replaced = Math.min(rows.size(), document.getRowCount() - rowIndex);
+        for (int i = 0; i < replaced; i++) {
+            document.replaceRow(rowIndex + i, rows.get(i));
+        }
+        fireTableRowsUpdated(rowIndex, rowIndex + replaced - 1);
+        return replaced;
     }
 
     public List<String> copyRow(int rowIndex) {

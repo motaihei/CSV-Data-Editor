@@ -114,7 +114,6 @@ try {
 
     Copy-Item -LiteralPath $generatedAppImage -Destination $PortableDir -Recurse
     Copy-Item -LiteralPath (Join-Path $RepoRoot "config") -Destination (Join-Path $PortableDir "config") -Recurse
-    Copy-Item -LiteralPath (Join-Path $RepoRoot "samples") -Destination (Join-Path $PortableDir "samples") -Recurse
     Copy-Item -LiteralPath (Join-Path $RepoRoot "README.md") -Destination (Join-Path $PortableDir "README.md")
     Initialize-BackupDirectory $PortableBackupDir
 
