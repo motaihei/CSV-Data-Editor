@@ -35,6 +35,7 @@ public class CsvDataTreePanel extends JPanel {
 
     private final JTree tree;
     private final JPopupMenu folderPopupMenu;
+    private final JMenuItem expandTreeItem;
     private final JMenuItem openDescendantCsvItem;
     private CsvOpenListener csvOpenListener;
 
@@ -49,13 +50,22 @@ public class CsvDataTreePanel extends JPanel {
         this.tree.setShowsRootHandles(true);
 
         this.folderPopupMenu = new JPopupMenu();
-        this.openDescendantCsvItem = new JMenuItem("配下を展開してCSVをすべて開く");
+        this.expandTreeItem = new JMenuItem("ツリーを展開");
+        this.expandTreeItem.addActionListener(new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent event) {
+                expandSelectedTreeOnly();
+            }
+        });
+        this.openDescendantCsvItem = new JMenuItem("ツリーを展開してファイルを開く");
         this.openDescendantCsvItem.addActionListener(new javax.swing.AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent event) {
                 openDescendantCsvFiles();
             }
         });
+        this.folderPopupMenu.add(expandTreeItem);
+        this.folderPopupMenu.addSeparator();
         this.folderPopupMenu.add(openDescendantCsvItem);
 
         installOpenHandlers();
@@ -135,6 +145,15 @@ public class CsvDataTreePanel extends JPanel {
 
         openDescendantCsvItem.setEnabled(!collectCsvNodes(node).isEmpty());
         folderPopupMenu.show(tree, event.getX(), event.getY());
+    }
+
+    private void expandSelectedTreeOnly() {
+        TreePath selectionPath = tree.getSelectionPath();
+        if (selectionPath == null) {
+            return;
+        }
+
+        expandDescendants(selectionPath);
     }
 
     private void openSelectedCsv() {

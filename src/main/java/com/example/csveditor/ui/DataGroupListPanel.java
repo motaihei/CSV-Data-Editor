@@ -119,6 +119,24 @@ public class DataGroupListPanel extends JPanel {
         });
     }
 
+    public void setSelectedGroupKey(final String groupKey) {
+        runOnEdt(new Runnable() {
+            @Override
+            public void run() {
+                updating = true;
+                try {
+                    if (groupKey != null && listModel.contains(groupKey)) {
+                        groupList.setSelectedValue(groupKey, true);
+                    } else {
+                        groupList.clearSelection();
+                    }
+                } finally {
+                    updating = false;
+                }
+            }
+        });
+    }
+
     private void showPopupIfNeeded(MouseEvent event) {
         if (!event.isPopupTrigger()) {
             return;

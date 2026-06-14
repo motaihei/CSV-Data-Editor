@@ -39,6 +39,8 @@ import java.awt.Insets;
 import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.Rectangle;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.FontMetrics;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -53,6 +55,7 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.EventObject;
 import java.util.List;
 
 /**
@@ -80,6 +83,7 @@ public final class CsvEditorPanel extends JPanel {
     private final CsvDocumentService documentService;
     private static final int MAX_UNDO_HISTORY = 5;
     private static final Color DIRTY_BACKGROUND = new Color(255, 250, 218);
+    private static final String DEFAULT_ROW_CLIPBOARD_DELIMITER = "\t";
     private CsvDocument document;
     private CsvTableModel tableModel;
     private JTable table;
@@ -117,6 +121,7 @@ public final class CsvEditorPanel extends JPanel {
     private TableSelectionListener tableSelectionListener;
     private List<List<String>> copiedRows;
     private int popupModelRow = -1;
+    private int popupModelColumn = -1;
     private List<List<String>> savedRowsSnapshot;
     private Deque<List<List<String>>> undoHistory = new ArrayDeque<List<List<String>>>();
     private Deque<List<List<String>>> redoHistory = new ArrayDeque<List<List<String>>>();
@@ -126,6 +131,7 @@ public final class CsvEditorPanel extends JPanel {
     private boolean canMoveDown = true;
     private boolean collapsed;
     private boolean suppressSelectionNotification;
+    private String rowClipboardDelimiter = DEFAULT_ROW_CLIPBOARD_DELIMITER;
 
     public CsvEditorPanel(CsvDocument document, CsvDocumentService documentService) {
         if (document == null) {
@@ -143,6 +149,14 @@ public final class CsvEditorPanel extends JPanel {
 
     public CsvDocument getDocument() {
         return document;
+    }
+
+    public void setRowClipboardDelimiter(String rowClipboardDelimiter) {
+        if (rowClipboardDelimiter == null || rowClipboardDelimiter.length() == 0) {
+            this.rowClipboardDelimiter = DEFAULT_ROW_CLIPBOARD_DELIMITER;
+            return;
+        }
+        this.rowClipboardDelimiter = rowClipboardDelimiter;
     }
 
     public boolean isDirty() {
@@ -383,11 +397,11 @@ public final class CsvEditorPanel extends JPanel {
         });
         collapseButton.addActionListener(e -> toggleCollapsed());
 
-        moveButtonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        moveButtonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 1, 0));
         moveButtonsPanel.add(moveUpButton);
         moveButtonsPanel.add(moveDownButton);
         moveButtonsPanel.add(collapseButton);
-        moveButtonsPanel.setMaximumSize(new Dimension(120, 28));
+        moveButtonsPanel.setMaximumSize(new Dimension(74, 22));
         moveButtonsPanel.setAlignmentY(Component.TOP_ALIGNMENT);
         add(moveButtonsPanel, BorderLayout.WEST);
 
@@ -424,7 +438,13 @@ public final class CsvEditorPanel extends JPanel {
         tableModel = new CsvTableModel(document);
         attachUndoListener(tableModel);
         attachDirtyListener(tableModel);
-        table = new JTable(tableModel);
+        table = new JTable(tableModel) {
+            @Override
+            public boolean editCellAt(int row, int column, EventObject event) {
+                notifyTableInteraction();
+                return super.editCellAt(row, column, event);
+            }
+        };
         table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
         table.setFillsViewportHeight(false);
         table.setRowHeight(18);
@@ -469,28 +489,39 @@ public final class CsvEditorPanel extends JPanel {
         table.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
             @Override
             public void valueChanged(ListSelectionEvent event) {
-                if (event.getValueIsAdjusting() || suppressSelectionNotification || tableSelectionListener == null) {
+                if (event.getValueIsAdjusting() || suppressSelectionNotification) {
                     return;
                 }
                 if (table.getSelectedRowCount() > 0) {
-                    tableSelectionListener.tableSelectionChanged(CsvEditorPanel.this);
+                    notifyTableInteraction();
                 }
             }
         });
     }
 
+    private void notifyTableInteraction() {
+        if (suppressSelectionNotification || tableSelectionListener == null) {
+            return;
+        }
+        tableSelectionListener.tableSelectionChanged(CsvEditorPanel.this);
+    }
+
     private void installRowPopupMenu() {
         final JPopupMenu popupMenu = new JPopupMenu();
+        JMenuItem copyCellValueItem = new JMenuItem("セルの値をコピー");
         JMenuItem insertRowItem = new JMenuItem("空白行挿入");
         JMenuItem copyRowItem = new JMenuItem("行コピー");
         JMenuItem pasteRowItem = new JMenuItem("コピー行貼付け");
         JMenuItem insertCopiedRowItem = new JMenuItem("コピー行を挿入");
         JMenuItem deleteRowItem = new JMenuItem("行削除");
+        copyCellValueItem.addActionListener(e -> copyPopupCellValue());
         insertRowItem.addActionListener(e -> insertBlankRowAbovePopupRow());
         copyRowItem.addActionListener(e -> copyPopupRow());
         pasteRowItem.addActionListener(e -> pasteCopiedRowToPopupRow());
         insertCopiedRowItem.addActionListener(e -> insertCopiedRowAbovePopupRow());
         deleteRowItem.addActionListener(e -> deleteSelectedRows());
+        popupMenu.add(copyCellValueItem);
+        popupMenu.addSeparator();
         popupMenu.add(insertRowItem);
         popupMenu.addSeparator();
         popupMenu.add(copyRowItem);
@@ -518,10 +549,13 @@ public final class CsvEditorPanel extends JPanel {
                 if (row < 0) {
                     return;
                 }
+                int column = table.columnAtPoint(event.getPoint());
                 if (!table.isRowSelected(row)) {
                     table.setRowSelectionInterval(row, row);
                 }
                 popupModelRow = table.convertRowIndexToModel(row);
+                popupModelColumn = column < 0 ? -1 : table.convertColumnIndexToModel(column);
+                copyCellValueItem.setEnabled(popupModelColumn >= 0 && popupModelColumn < tableModel.getColumnCount());
                 pasteRowItem.setEnabled(copiedRows != null && !copiedRows.isEmpty());
                 insertCopiedRowItem.setEnabled(copiedRows != null && !copiedRows.isEmpty());
                 table.requestFocusInWindow();
@@ -530,11 +564,43 @@ public final class CsvEditorPanel extends JPanel {
         });
     }
 
+    private void copyPopupCellValue() {
+        if (popupModelRow < 0 || popupModelRow >= tableModel.getRowCount()
+                || popupModelColumn < 0 || popupModelColumn >= tableModel.getColumnCount()) {
+            return;
+        }
+        Object value = tableModel.getValueAt(popupModelRow, popupModelColumn);
+        String text = value == null ? "" : String.valueOf(value);
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+    }
+
     private void copyPopupRow() {
         if (popupModelRow < 0 || popupModelRow >= tableModel.getRowCount()) {
             return;
         }
         copiedRows = copySelectedModelRows();
+        copyRowsToClipboard(copiedRows);
+    }
+
+    private void copyRowsToClipboard(List<List<String>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        StringBuilder builder = new StringBuilder();
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            if (rowIndex > 0) {
+                builder.append(System.lineSeparator());
+            }
+            List<String> row = rows.get(rowIndex);
+            for (int columnIndex = 0; columnIndex < row.size(); columnIndex++) {
+                if (columnIndex > 0) {
+                    builder.append(rowClipboardDelimiter);
+                }
+                String value = row.get(columnIndex);
+                builder.append(value == null ? "" : value);
+            }
+        }
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(builder.toString()), null);
     }
 
     private void pasteCopiedRowToPopupRow() {
@@ -1090,7 +1156,10 @@ public final class CsvEditorPanel extends JPanel {
             width = 72;
         } else if ("↑".equals(button.getText()) || "↓".equals(button.getText())
                 || "▾".equals(button.getText()) || "▸".equals(button.getText())) {
-            width = 28;
+            button.setMargin(new Insets(0, 0, 0, 0));
+            button.setPreferredSize(new Dimension(22, 20));
+            button.setMinimumSize(new Dimension(22, 20));
+            return;
         }
         button.setPreferredSize(new Dimension(width, 22));
         button.setMinimumSize(new Dimension(width, 22));

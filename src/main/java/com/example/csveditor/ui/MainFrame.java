@@ -5,6 +5,7 @@ import com.example.csveditor.domain.DataNode;
 import com.example.csveditor.service.CsvDocumentService;
 import com.example.csveditor.service.CsvDataScanService;
 
+import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.AbstractAction;
 import javax.swing.Box;
@@ -15,6 +16,7 @@ import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
 import javax.swing.JToolBar;
@@ -23,6 +25,7 @@ import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
 import java.awt.Cursor;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Image;
 import java.awt.Toolkit;
 import java.awt.event.InputEvent;
@@ -63,6 +66,7 @@ public class MainFrame extends JFrame {
     private static final String SESSION_COLLAPSED_GROUPS_KEY = "sessionCollapsedGroups";
     private static final String SESSION_DATA_GROUPING_ENABLED_KEY = "sessionDataGroupingEnabled";
     private static final String DATA_GROUPING_ENABLED_KEY = "dataGroupingEnabled";
+    private static final String ROW_CLIPBOARD_DELIMITER_TYPE_KEY = "rowClipboardDelimiterType";
     private static final String GROUPED_MODE_SUFFIX = ".grouped";
     private static final String FLAT_MODE_SUFFIX = ".flat";
 
@@ -76,6 +80,7 @@ public class MainFrame extends JFrame {
         this.statusBar = new StatusBar();
         this.preferences = Preferences.userNodeForPackage(MainFrame.class);
         this.csvStackPanel.setDataGroupingEnabled(preferences.getBoolean(DATA_GROUPING_ENABLED_KEY, true));
+        this.csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter());
         buildUi();
         installListeners();
         installGlobalKeyBindings();
@@ -158,28 +163,39 @@ public class MainFrame extends JFrame {
         columnWidthField.setMaximumSize(columnWidthFieldSize);
         columnWidthField.setToolTipText("表示中のCSVテーブルへ適用する列幅をpxで指定します。");
         columnWidthField.addActionListener(e -> applyColumnWidthToOpenTables());
-        toolBar.add(columnWidthField);
 
         JButton applyColumnWidthButton = new JButton("列幅を全設定");
         applyColumnWidthButton.setToolTipText("表示中のCSVテーブルすべての列幅を指定値に変更します。");
         applyColumnWidthButton.addActionListener(e -> applyColumnWidthToOpenTables());
-        toolBar.add(applyColumnWidthButton);
 
         JButton autoFitColumnWidthButton = new JButton("列幅を全自動調整");
         autoFitColumnWidthButton.setToolTipText("表示中のCSVテーブルすべての列幅を列名とセル値に合わせて自動調整します。");
         autoFitColumnWidthButton.addActionListener(e -> autoFitColumnWidthsForOpenTables());
-        toolBar.add(autoFitColumnWidthButton);
+        toolBar.add(createToolBarGroup(autoFitColumnWidthButton, applyColumnWidthButton, columnWidthField));
+        toolBar.addSeparator(new Dimension(10, 0));
 
         JButton closeAllCsvButton = new JButton("すべて閉じる");
         closeAllCsvButton.setToolTipText("表示中のCSVパネルをすべて閉じます。");
         closeAllCsvButton.addActionListener(e -> closeAllOpenCsvPanels());
-        toolBar.add(closeAllCsvButton);
+        toolBar.add(createToolBarGroup(closeAllCsvButton));
+        toolBar.addSeparator(new Dimension(10, 0));
 
         JButton settingsButton = new JButton("設定");
         settingsButton.addActionListener(e -> showSettingsDialog());
-        toolBar.add(settingsButton);
+        toolBar.add(createToolBarGroup(settingsButton));
 
         return toolBar;
+    }
+
+    private static JPanel createToolBarGroup(JComponent... components) {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        panel.setOpaque(false);
+        panel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+        for (JComponent component : components) {
+            panel.add(component);
+        }
+        panel.setMaximumSize(panel.getPreferredSize());
+        return panel;
     }
 
     private void installListeners() {
@@ -201,6 +217,12 @@ public class MainFrame extends JFrame {
                 if (!restoringSession && !suppressSessionSaving) {
                     saveOpenSession();
                 }
+            }
+        });
+        csvStackPanel.setActiveGroupChangeListener(new CsvStackPanel.ActiveGroupChangeListener() {
+            @Override
+            public void activeGroupChanged(String groupKey) {
+                dataGroupListPanel.setSelectedGroupKey(groupKey);
             }
         });
         dataGroupListPanel.setGroupSelectionListener(new DataGroupListPanel.GroupSelectionListener() {
@@ -453,6 +475,7 @@ public class MainFrame extends JFrame {
     private void updateOpenGroupList() {
         updateDataGroupListVisibility();
         dataGroupListPanel.setGroupKeys(csvStackPanel.getOpenGroupKeys());
+        dataGroupListPanel.setSelectedGroupKey(csvStackPanel.getActiveGroupKey());
     }
 
     private void updateDataGroupListVisibility() {
@@ -469,19 +492,21 @@ public class MainFrame extends JFrame {
 
     private void showSettingsDialog() {
         SettingsDialog dialog = new SettingsDialog(this, csvStackPanel.isDataGroupingEnabled(),
+                preferences.get(ROW_CLIPBOARD_DELIMITER_TYPE_KEY,
+                        SettingsDialog.ROW_CLIPBOARD_DELIMITER_TAB),
                 new SettingsDialog.SettingsApplyListener() {
                     @Override
-                    public boolean settingsApplied(boolean dataGroupingEnabled) {
-                        return applyDataGroupingSetting(dataGroupingEnabled);
+                    public boolean settingsApplied(boolean dataGroupingEnabled, String rowClipboardDelimiterType) {
+                        return applySettings(dataGroupingEnabled, rowClipboardDelimiterType);
                     }
                 });
         dialog.setVisible(true);
     }
 
-    private boolean applyDataGroupingSetting(boolean dataGroupingEnabled) {
+    private boolean applySettings(boolean dataGroupingEnabled, String rowClipboardDelimiterType) {
         if (csvStackPanel.isDataGroupingEnabled() == dataGroupingEnabled) {
-            preferences.putBoolean(DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
-            preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+            saveSettings(dataGroupingEnabled, rowClipboardDelimiterType);
+            csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter(rowClipboardDelimiterType));
             saveOpenSession();
             return true;
         }
@@ -493,9 +518,9 @@ public class MainFrame extends JFrame {
             if (!csvStackPanel.requestCloseAll()) {
                 return false;
             }
-            preferences.putBoolean(DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
-            preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+            saveSettings(dataGroupingEnabled, rowClipboardDelimiterType);
             csvStackPanel.setDataGroupingEnabled(dataGroupingEnabled);
+            csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter(rowClipboardDelimiterType));
             updateOpenGroupList();
         } finally {
             suppressSessionSaving = previousSuppressSessionSaving;
@@ -505,6 +530,31 @@ public class MainFrame extends JFrame {
             restoreOpenSession(rootDirectory);
         }
         return true;
+    }
+
+    private void saveSettings(boolean dataGroupingEnabled, String rowClipboardDelimiterType) {
+        preferences.putBoolean(DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+        preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
+        preferences.put(ROW_CLIPBOARD_DELIMITER_TYPE_KEY, normalizeRowClipboardDelimiterType(rowClipboardDelimiterType));
+    }
+
+    private String getRowClipboardDelimiter() {
+        return getRowClipboardDelimiter(preferences.get(ROW_CLIPBOARD_DELIMITER_TYPE_KEY,
+                SettingsDialog.ROW_CLIPBOARD_DELIMITER_TAB));
+    }
+
+    private static String getRowClipboardDelimiter(String rowClipboardDelimiterType) {
+        if (SettingsDialog.ROW_CLIPBOARD_DELIMITER_COMMA.equals(rowClipboardDelimiterType)) {
+            return ",";
+        }
+        return "\t";
+    }
+
+    private static String normalizeRowClipboardDelimiterType(String rowClipboardDelimiterType) {
+        if (SettingsDialog.ROW_CLIPBOARD_DELIMITER_COMMA.equals(rowClipboardDelimiterType)) {
+            return SettingsDialog.ROW_CLIPBOARD_DELIMITER_COMMA;
+        }
+        return SettingsDialog.ROW_CLIPBOARD_DELIMITER_TAB;
     }
 
     private String getModeSessionValue(String baseKey, boolean dataGroupingEnabled) {

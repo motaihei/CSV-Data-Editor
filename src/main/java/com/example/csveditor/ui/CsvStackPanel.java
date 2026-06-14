@@ -9,11 +9,11 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
-import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.Scrollable;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
 import javax.swing.JViewport;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -43,6 +43,12 @@ public class CsvStackPanel extends JScrollPane {
         void sessionChanged();
     }
 
+    public interface ActiveGroupChangeListener {
+        void activeGroupChanged(String groupKey);
+    }
+
+    private static final Color DISPLAYED_GROUP_BORDER = new Color(70, 142, 104);
+    private static final Color DISPLAYED_GROUP_ACCENT = new Color(34, 120, 78);
     private final JPanel contentPanel;
     private final Map<Path, CsvEditorPanel> panelsByPath;
     private final Map<String, JPanel> groupSectionsByKey;
@@ -50,7 +56,12 @@ public class CsvStackPanel extends JScrollPane {
     private final CsvDocumentService documentService;
     private final DataGroupKeyResolver groupKeyResolver;
     private SessionChangeListener sessionChangeListener;
+    private ActiveGroupChangeListener activeGroupChangeListener;
     private boolean dataGroupingEnabled = true;
+    private boolean rebuildingContentPanel;
+    private boolean suppressVisibleGroupTracking;
+    private String rowClipboardDelimiter = "\t";
+    private String activeGroupKey;
 
     public CsvStackPanel(CsvDocumentService documentService) {
         this(documentService, new DataGroupKeyResolver(DataGroupingConfigLoader.loadDefault()));
@@ -71,10 +82,15 @@ public class CsvStackPanel extends JScrollPane {
         getVerticalScrollBar().setUnitIncrement(16);
         getHorizontalScrollBar().setUnitIncrement(16);
         installResponsiveTableRefreshHandler();
+        installVisibleGroupTracking();
     }
 
     public void setSessionChangeListener(SessionChangeListener sessionChangeListener) {
         this.sessionChangeListener = sessionChangeListener;
+    }
+
+    public void setActiveGroupChangeListener(ActiveGroupChangeListener activeGroupChangeListener) {
+        this.activeGroupChangeListener = activeGroupChangeListener;
     }
 
     public void addOrFocusDocument(final CsvDocument document) {
@@ -84,12 +100,14 @@ public class CsvStackPanel extends JScrollPane {
                 Path key = normalize(document.getFilePath());
                 CsvEditorPanel existing = panelsByPath.get(key);
                 if (existing != null) {
+                    setActiveGroupKey(getGroupKey(existing));
                     scrollToPanel(existing);
                     existing.requestFocusInWindow();
                     return;
                 }
 
                 final CsvEditorPanel panel = new CsvEditorPanel(document, documentService);
+                panel.setRowClipboardDelimiter(rowClipboardDelimiter);
                 panel.setAlignmentX(Component.LEFT_ALIGNMENT);
                 panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, panel.getPreferredSize().height));
                 panel.setCloseRequestListener(new CsvEditorPanel.CloseRequestListener() {
@@ -112,12 +130,14 @@ public class CsvStackPanel extends JScrollPane {
                 panel.setTableSelectionListener(new CsvEditorPanel.TableSelectionListener() {
                     @Override
                     public void tableSelectionChanged(CsvEditorPanel selectedPanel) {
+                        setActiveGroupKey(getGroupKey(selectedPanel));
                         clearOtherTableSelections(selectedPanel);
                     }
                 });
 
                 panelsByPath.put(key, panel);
                 rebuildContentPanel();
+                setActiveGroupKey(getGroupKey(panel));
                 notifySessionChanged();
                 scrollToPanel(panel);
             }
@@ -131,6 +151,7 @@ public class CsvStackPanel extends JScrollPane {
     public void focusDocument(Path filePath) {
         CsvEditorPanel panel = panelsByPath.get(normalize(filePath));
         if (panel != null) {
+            setActiveGroupKey(getGroupKey(panel));
             scrollToPanel(panel);
             panel.requestFocusInWindow();
         }
@@ -161,8 +182,22 @@ public class CsvStackPanel extends JScrollPane {
             return;
         }
         this.dataGroupingEnabled = dataGroupingEnabled;
+        if (!dataGroupingEnabled) {
+            setActiveGroupKey(null);
+        }
         rebuildContentPanel();
         notifySessionChanged();
+    }
+
+    public void setRowClipboardDelimiter(String rowClipboardDelimiter) {
+        if (rowClipboardDelimiter == null || rowClipboardDelimiter.length() == 0) {
+            this.rowClipboardDelimiter = "\t";
+        } else {
+            this.rowClipboardDelimiter = rowClipboardDelimiter;
+        }
+        for (CsvEditorPanel panel : panelsByPath.values()) {
+            panel.setRowClipboardDelimiter(this.rowClipboardDelimiter);
+        }
     }
 
     public List<String> getOpenGroupKeys() {
@@ -179,6 +214,10 @@ public class CsvStackPanel extends JScrollPane {
         return groupKeys;
     }
 
+    public String getActiveGroupKey() {
+        return activeGroupKey;
+    }
+
     public void focusGroup(final String groupKey) {
         if (!dataGroupingEnabled || groupKey == null) {
             return;
@@ -186,9 +225,12 @@ public class CsvStackPanel extends JScrollPane {
         runOnEdt(new Runnable() {
             @Override
             public void run() {
+                suppressVisibleGroupTracking = true;
+                setActiveGroupKey(groupKey);
                 JPanel sectionPanel = groupSectionsByKey.get(groupKey);
                 if (sectionPanel != null) {
                     contentPanel.revalidate();
+                    contentPanel.doLayout();
                     JViewport viewport = getViewport();
                     int maxY = Math.max(0,
                             contentPanel.getHeight() - viewport.getExtentSize().height);
@@ -196,6 +238,13 @@ public class CsvStackPanel extends JScrollPane {
                     viewport.setViewPosition(new Point(0, targetY));
                     viewport.repaint();
                 }
+                SwingUtilities.invokeLater(new Runnable() {
+                    @Override
+                    public void run() {
+                        setActiveGroupKey(groupKey);
+                        suppressVisibleGroupTracking = false;
+                    }
+                });
             }
         });
     }
@@ -258,7 +307,11 @@ public class CsvStackPanel extends JScrollPane {
     }
 
     private void closePanel(CsvEditorPanel panel) {
+        String removedGroupKey = getGroupKey(panel);
         panelsByPath.remove(normalize(panel.getDocument().getFilePath()));
+        if (removedGroupKey.equals(activeGroupKey) && !hasGroupKey(removedGroupKey)) {
+            setActiveGroupKey(findFirstOpenGroupKey());
+        }
         rebuildContentPanel();
         notifySessionChanged();
     }
@@ -284,6 +337,9 @@ public class CsvStackPanel extends JScrollPane {
             }
         }
         collapsedGroupKeys.remove(groupKey);
+        if (groupKey.equals(activeGroupKey)) {
+            setActiveGroupKey(findFirstOpenGroupKey());
+        }
         rebuildContentPanel();
         notifySessionChanged();
     }
@@ -337,62 +393,74 @@ public class CsvStackPanel extends JScrollPane {
         }
         rebuildContentPanel();
         notifySessionChanged();
+        setActiveGroupKey(getGroupKey(panel));
         scrollToPanel(panel);
     }
 
     private void rebuildContentPanel() {
+        rebuildingContentPanel = true;
         contentPanel.removeAll();
         groupSectionsByKey.clear();
 
-        if (!dataGroupingEnabled) {
-            List<CsvEditorPanel> panels = new ArrayList<CsvEditorPanel>(panelsByPath.values());
-            for (int i = 0; i < panels.size(); i++) {
-                CsvEditorPanel panel = panels.get(i);
-                panel.setMoveAvailability(i > 0, i < panels.size() - 1);
-                contentPanel.add(panel);
-                contentPanel.add(Box.createVerticalStrut(6));
+        try {
+            if (!dataGroupingEnabled) {
+                setActiveGroupKey(null);
+                List<CsvEditorPanel> panels = new ArrayList<CsvEditorPanel>(panelsByPath.values());
+                for (int i = 0; i < panels.size(); i++) {
+                    CsvEditorPanel panel = panels.get(i);
+                    panel.setMoveAvailability(i > 0, i < panels.size() - 1);
+                    contentPanel.add(panel);
+                    contentPanel.add(Box.createVerticalStrut(6));
+                }
+                revalidate();
+                repaint();
+                refreshOpenTableSizesLater();
+                return;
+            }
+
+            Map<String, List<CsvEditorPanel>> groupedPanels = new LinkedHashMap<String, List<CsvEditorPanel>>();
+            for (CsvEditorPanel panel : panelsByPath.values()) {
+                String groupKey = getGroupKey(panel);
+                List<CsvEditorPanel> group = groupedPanels.get(groupKey);
+                if (group == null) {
+                    group = new ArrayList<CsvEditorPanel>();
+                    groupedPanels.put(groupKey, group);
+                }
+                group.add(panel);
+            }
+            if (activeGroupKey == null || !groupedPanels.containsKey(activeGroupKey)) {
+                activeGroupKey = groupedPanels.isEmpty() ? null : groupedPanels.keySet().iterator().next();
+                notifyActiveGroupChanged();
+            }
+
+            for (Map.Entry<String, List<CsvEditorPanel>> entry : groupedPanels.entrySet()) {
+                String groupKey = entry.getKey();
+                boolean active = groupKey.equals(activeGroupKey);
+                JPanel groupPanel = createGroupPanel(groupKey, active);
+                JPanel bodyPanel = createGroupBodyPanel(active);
+                List<CsvEditorPanel> groupPanels = entry.getValue();
+                for (int i = 0; i < groupPanels.size(); i++) {
+                    CsvEditorPanel panel = groupPanels.get(i);
+                    panel.setMoveAvailability(i > 0, i < groupPanels.size() - 1);
+                    if (!collapsedGroupKeys.contains(groupKey)) {
+                        bodyPanel.add(panel);
+                        bodyPanel.add(Box.createVerticalStrut(6));
+                    }
+                }
+                if (!collapsedGroupKeys.contains(groupKey)) {
+                    groupPanel.add(bodyPanel, BorderLayout.CENTER);
+                }
+                JPanel groupSectionPanel = createGroupSectionPanel(groupPanel, active);
+                groupSectionsByKey.put(groupKey, groupSectionPanel);
+                contentPanel.add(groupSectionPanel);
+                contentPanel.add(Box.createVerticalStrut(8));
             }
             revalidate();
             repaint();
             refreshOpenTableSizesLater();
-            return;
+        } finally {
+            rebuildingContentPanel = false;
         }
-
-        Map<String, List<CsvEditorPanel>> groupedPanels = new LinkedHashMap<String, List<CsvEditorPanel>>();
-        for (CsvEditorPanel panel : panelsByPath.values()) {
-            String groupKey = getGroupKey(panel);
-            List<CsvEditorPanel> group = groupedPanels.get(groupKey);
-            if (group == null) {
-                group = new ArrayList<CsvEditorPanel>();
-                groupedPanels.put(groupKey, group);
-            }
-            group.add(panel);
-        }
-
-        for (Map.Entry<String, List<CsvEditorPanel>> entry : groupedPanels.entrySet()) {
-            String groupKey = entry.getKey();
-            JPanel groupPanel = createGroupPanel(groupKey);
-            JPanel bodyPanel = createGroupBodyPanel();
-            List<CsvEditorPanel> groupPanels = entry.getValue();
-            for (int i = 0; i < groupPanels.size(); i++) {
-                CsvEditorPanel panel = groupPanels.get(i);
-                panel.setMoveAvailability(i > 0, i < groupPanels.size() - 1);
-                if (!collapsedGroupKeys.contains(groupKey)) {
-                    bodyPanel.add(panel);
-                    bodyPanel.add(Box.createVerticalStrut(6));
-                }
-            }
-            if (!collapsedGroupKeys.contains(groupKey)) {
-                groupPanel.add(bodyPanel, BorderLayout.CENTER);
-            }
-            JPanel groupSectionPanel = createGroupSectionPanel(groupKey, groupPanel);
-            groupSectionsByKey.put(groupKey, groupSectionPanel);
-            contentPanel.add(groupSectionPanel);
-            contentPanel.add(Box.createVerticalStrut(8));
-        }
-        revalidate();
-        repaint();
-        refreshOpenTableSizesLater();
     }
 
     public void refreshOpenTableSizes() {
@@ -414,30 +482,20 @@ public class CsvStackPanel extends JScrollPane {
         });
     }
 
-    private JPanel createGroupSectionPanel(String groupKey, JPanel groupPanel) {
-        JPanel sectionPanel = new JPanel(new BorderLayout(2, 0)) {
+    private JPanel createGroupSectionPanel(JPanel groupPanel, boolean active) {
+        JPanel sectionPanel = new JPanel(new BorderLayout(0, 0)) {
             @Override
             public Dimension getMaximumSize() {
                 return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
             }
         };
         sectionPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JPanel captionPanel = new JPanel(new BorderLayout(0, 0));
-        JLabel captionLabel = new JLabel(groupKey);
-        captionLabel.setHorizontalAlignment(JLabel.RIGHT);
-        captionLabel.setFont(captionLabel.getFont().deriveFont(Font.BOLD));
-        int captionWidth = captionLabel.getPreferredSize().width;
-        captionPanel.setPreferredSize(new Dimension(captionWidth, 34));
-        captionPanel.setMinimumSize(new Dimension(captionWidth, 24));
-        captionPanel.add(captionLabel, BorderLayout.NORTH);
-
-        sectionPanel.add(captionPanel, BorderLayout.WEST);
+        sectionPanel.setBackground(getPanelBackground());
         sectionPanel.add(groupPanel, BorderLayout.CENTER);
         return sectionPanel;
     }
 
-    private JPanel createGroupPanel(String groupKey) {
+    private JPanel createGroupPanel(String groupKey, boolean active) {
         JPanel groupPanel = new JPanel() {
             @Override
             public Dimension getMaximumSize() {
@@ -446,22 +504,28 @@ public class CsvStackPanel extends JScrollPane {
         };
         groupPanel.setLayout(new BorderLayout(0, 4));
         groupPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        groupPanel.setBackground(getPanelBackground());
         groupPanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Color.BLACK, 1),
-                BorderFactory.createEmptyBorder(4, 4, 0, 4)));
-        groupPanel.add(createGroupHeaderPanel(groupKey), BorderLayout.NORTH);
+                BorderFactory.createMatteBorder(1, active ? 6 : 1, 1, 1,
+                        active ? DISPLAYED_GROUP_ACCENT : getInactiveGroupBorder()),
+                BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(active ? DISPLAYED_GROUP_BORDER : getInactiveGroupBorder(), 1),
+                        BorderFactory.createEmptyBorder(4, 4, 0, 4))));
+        groupPanel.add(createGroupHeaderPanel(groupKey, active), BorderLayout.NORTH);
         return groupPanel;
     }
 
-    private JPanel createGroupBodyPanel() {
+    private JPanel createGroupBodyPanel(boolean active) {
         JPanel bodyPanel = new JPanel();
         bodyPanel.setLayout(new BoxLayout(bodyPanel, BoxLayout.Y_AXIS));
         bodyPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        bodyPanel.setBackground(getPanelBackground());
         return bodyPanel;
     }
 
-    private JPanel createGroupHeaderPanel(final String groupKey) {
+    private JPanel createGroupHeaderPanel(final String groupKey, boolean active) {
         JPanel headerPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        headerPanel.setBackground(getPanelBackground());
         final JButton collapseButton = createGroupHeaderButton(
                 collapsedGroupKeys.contains(groupKey) ? "▸" : "▾");
         collapseButton.setToolTipText("このデータグループを折りたたみ/展開します。");
@@ -501,6 +565,82 @@ public class CsvStackPanel extends JScrollPane {
         return groupKeyResolver.resolve(panel.getDocument().getRelativePath());
     }
 
+    private void setActiveGroupKey(String groupKey) {
+        if (groupKey != null && !dataGroupingEnabled) {
+            groupKey = null;
+        }
+        if (groupKey == null ? activeGroupKey == null : groupKey.equals(activeGroupKey)) {
+            return;
+        }
+        activeGroupKey = groupKey;
+        rebuildActiveGroupHighlight();
+        notifyActiveGroupChanged();
+    }
+
+    private void rebuildActiveGroupHighlight() {
+        if (dataGroupingEnabled && !rebuildingContentPanel) {
+            rebuildContentPanel();
+        }
+    }
+
+    private void notifyActiveGroupChanged() {
+        if (activeGroupChangeListener != null) {
+            activeGroupChangeListener.activeGroupChanged(activeGroupKey);
+        }
+    }
+
+    private boolean hasGroupKey(String groupKey) {
+        if (groupKey == null) {
+            return false;
+        }
+        for (CsvEditorPanel panel : panelsByPath.values()) {
+            if (groupKey.equals(getGroupKey(panel))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String findFirstOpenGroupKey() {
+        for (CsvEditorPanel panel : panelsByPath.values()) {
+            return getGroupKey(panel);
+        }
+        return null;
+    }
+
+    private void updateActiveGroupFromViewport() {
+        if (suppressVisibleGroupTracking || !dataGroupingEnabled || groupSectionsByKey.isEmpty()) {
+            return;
+        }
+        JViewport viewport = getViewport();
+        int viewportTop = viewport.getViewPosition().y;
+        int viewportBottom = viewportTop + viewport.getExtentSize().height;
+        String bestGroupKey = null;
+        int bestOverlap = -1;
+        for (Map.Entry<String, JPanel> entry : groupSectionsByKey.entrySet()) {
+            JPanel sectionPanel = entry.getValue();
+            int sectionTop = sectionPanel.getY();
+            int sectionBottom = sectionTop + sectionPanel.getHeight();
+            int overlap = Math.min(viewportBottom, sectionBottom) - Math.max(viewportTop, sectionTop);
+            if (overlap > bestOverlap) {
+                bestOverlap = overlap;
+                bestGroupKey = entry.getKey();
+            }
+        }
+        if (bestGroupKey != null && bestOverlap > 0) {
+            setActiveGroupKey(bestGroupKey);
+        }
+    }
+
+    private static Color getPanelBackground() {
+        Color background = UIManager.getColor("Panel.background");
+        return background == null ? new Color(238, 238, 238) : background;
+    }
+
+    private static Color getInactiveGroupBorder() {
+        return Color.BLACK;
+    }
+
     private void notifySessionChanged() {
         if (sessionChangeListener != null) {
             sessionChangeListener.sessionChanged();
@@ -531,6 +671,15 @@ public class CsvStackPanel extends JScrollPane {
                 refreshOpenTableSizesLater();
             }
         });
+    }
+
+    private void installVisibleGroupTracking() {
+        getVerticalScrollBar().addAdjustmentListener(event -> {
+            if (!event.getValueIsAdjusting()) {
+                updateActiveGroupFromViewport();
+            }
+        });
+        getViewport().addChangeListener(event -> updateActiveGroupFromViewport());
     }
 
     private static Path normalize(Path path) {
