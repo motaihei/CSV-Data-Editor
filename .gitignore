@@ -1,0 +1,53 @@
+# Maven and release build output
+target/
+dist/
+dependency-reduced-pom.xml
+release.properties
+
+# Java build artifacts
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# IDE metadata
+.idea/
+*.iml
+*.iws
+.classpath
+.project
+.settings/
+.factorypath
+.metadata/
+.apt_generated/
+.vscode/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.swp
+*.swo
+*.orig
+*.rej
+
+# Logs and temporary files
+*.log
+*.pid
+*.seed
+*.stackdump
+*.tmp
+*.temp
+*.bak
+
+# Application-generated CSV safety backups
+.backup/
+**/.backup/
+*.backup-*.csv
+*.csv.backup*
+*.csv.bak
