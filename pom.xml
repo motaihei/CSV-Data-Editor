@@ -12,6 +12,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
+        <release.version>1.0.0</release.version>
     </properties>
 
     <dependencies>
@@ -34,7 +35,7 @@
     </dependencies>
 
     <build>
-        <finalName>CSV-Data-Editor-1.0.0</finalName>
+        <finalName>CSV-Data-Editor-${release.version}</finalName>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

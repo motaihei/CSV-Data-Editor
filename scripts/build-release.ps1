@@ -78,7 +78,7 @@ try {
     Remove-DirectoryIfInsideRepo $DistDir
     New-Item -ItemType Directory -Path $DistDir | Out-Null
 
-    $mavenArgs = @("clean")
+    $mavenArgs = @("clean", "-Drelease.version=$Version")
     if (-not $SkipTests) {
         $mavenArgs += "test"
     }
