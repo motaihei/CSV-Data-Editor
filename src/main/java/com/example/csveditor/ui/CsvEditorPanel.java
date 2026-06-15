@@ -419,11 +419,32 @@ public final class CsvEditorPanel extends JPanel {
         collapseButton.addActionListener(e -> toggleCollapsed());
         pivotButton.addActionListener(e -> togglePivotView());
 
-        moveButtonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 1, 0));
-        moveButtonsPanel.add(moveUpButton);
-        moveButtonsPanel.add(moveDownButton);
-        moveButtonsPanel.add(collapseButton);
-        moveButtonsPanel.setMaximumSize(new Dimension(74, 22));
+        moveButtonsPanel = new JPanel(new BorderLayout());
+        JPanel moveButtonsContentPanel = new JPanel();
+        moveButtonsContentPanel.setLayout(new BoxLayout(moveButtonsContentPanel, BoxLayout.Y_AXIS));
+        moveButtonsContentPanel.setOpaque(false);
+        JPanel moveButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 1, 0));
+        Dimension moveButtonRowSize = new Dimension(74, 20);
+        moveButtonRow.setPreferredSize(moveButtonRowSize);
+        moveButtonRow.setMinimumSize(moveButtonRowSize);
+        moveButtonRow.setMaximumSize(moveButtonRowSize);
+        moveButtonRow.setOpaque(false);
+        moveButtonRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        moveButtonRow.add(moveUpButton);
+        moveButtonRow.add(moveDownButton);
+        moveButtonRow.add(collapseButton);
+        Dimension openFolderButtonSize = new Dimension(72, 22);
+        openFolderButton.setPreferredSize(openFolderButtonSize);
+        openFolderButton.setMinimumSize(openFolderButtonSize);
+        openFolderButton.setMaximumSize(openFolderButtonSize);
+        openFolderButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        moveButtonsContentPanel.add(moveButtonRow);
+        moveButtonsContentPanel.add(openFolderButton);
+        moveButtonsPanel.add(moveButtonsContentPanel, BorderLayout.NORTH);
+        Dimension moveButtonsPanelSize = new Dimension(74, 44);
+        moveButtonsPanel.setPreferredSize(moveButtonsPanelSize);
+        moveButtonsPanel.setMinimumSize(moveButtonsPanelSize);
+        moveButtonsPanel.setMaximumSize(moveButtonsPanelSize);
         moveButtonsPanel.setAlignmentY(Component.TOP_ALIGNMENT);
         add(moveButtonsPanel, BorderLayout.WEST);
 
@@ -453,7 +474,6 @@ public final class CsvEditorPanel extends JPanel {
         actionsPanel.add(saveButton);
         actionsPanel.add(reloadButton);
         actionsPanel.add(closeButton);
-        actionsPanel.add(openFolderButton);
         infoPanel.add(actionsPanel, BorderLayout.SOUTH);
         csvContentPanel.add(infoPanel, BorderLayout.WEST);
 
@@ -571,6 +591,7 @@ public final class CsvEditorPanel extends JPanel {
         JMenuItem insertCopiedRowItem = new JMenuItem("コピー行を挿入");
         JMenuItem deleteRowItem = new JMenuItem("行削除");
         JMenuItem copyFileNameItem = new JMenuItem("ファイル名をコピー");
+        JMenuItem copyAbsolutePathItem = new JMenuItem("絶対パスをコピー");
         copyCellValueItem.addActionListener(e -> copyPopupCellValue());
         insertRowItem.addActionListener(e -> insertBlankRowAbovePopupRow());
         copyRowItem.addActionListener(e -> copyPopupRow());
@@ -578,8 +599,10 @@ public final class CsvEditorPanel extends JPanel {
         insertCopiedRowItem.addActionListener(e -> insertCopiedRowAbovePopupRow());
         deleteRowItem.addActionListener(e -> deleteSelectedRows());
         copyFileNameItem.addActionListener(e -> copyDocumentFileNameToClipboard());
+        copyAbsolutePathItem.addActionListener(e -> copyDocumentAbsolutePathToClipboard());
         popupMenu.add(copyCellValueItem);
         popupMenu.add(copyFileNameItem);
+        popupMenu.add(copyAbsolutePathItem);
         popupMenu.addSeparator();
         popupMenu.add(insertRowItem);
         popupMenu.addSeparator();
@@ -654,8 +677,11 @@ public final class CsvEditorPanel extends JPanel {
     private void showFileNamePopup(Component component, int x, int y) {
         JPopupMenu popupMenu = new JPopupMenu();
         JMenuItem copyFileNameItem = new JMenuItem("ファイル名をコピー");
+        JMenuItem copyAbsolutePathItem = new JMenuItem("絶対パスをコピー");
         copyFileNameItem.addActionListener(e -> copyDocumentFileNameToClipboard());
+        copyAbsolutePathItem.addActionListener(e -> copyDocumentAbsolutePathToClipboard());
         popupMenu.add(copyFileNameItem);
+        popupMenu.add(copyAbsolutePathItem);
         popupMenu.show(component, x, y);
     }
 
@@ -664,10 +690,20 @@ public final class CsvEditorPanel extends JPanel {
                 .setContents(new StringSelection(getDocumentFileName()), null);
     }
 
+    private void copyDocumentAbsolutePathToClipboard() {
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new StringSelection(getDocumentAbsolutePath()), null);
+    }
+
     private String getDocumentFileName() {
         Path filePath = document.getFilePath();
         Path fileName = filePath == null ? null : filePath.getFileName();
         return fileName == null ? String.valueOf(filePath) : fileName.toString();
+    }
+
+    private String getDocumentAbsolutePath() {
+        Path filePath = document.getFilePath();
+        return filePath == null ? "" : filePath.toAbsolutePath().normalize().toString();
     }
 
     private void copyPopupCellValue() {

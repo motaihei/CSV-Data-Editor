@@ -97,57 +97,80 @@ public class CsvStackPanel extends JScrollPane {
     }
 
     public void addOrFocusDocument(final CsvDocument document) {
+        addOrFocusDocuments(Collections.singletonList(document));
+    }
+
+    public void addOrFocusDocuments(final List<CsvDocument> documents) {
+        if (documents == null || documents.isEmpty()) {
+            return;
+        }
         runOnEdt(new Runnable() {
             @Override
             public void run() {
-                Path key = normalize(document.getFilePath());
-                CsvEditorPanel existing = panelsByPath.get(key);
-                if (existing != null) {
-                    setActiveGroupKey(getGroupKey(existing));
-                    scrollToPanel(existing);
-                    existing.requestFocusInWindow();
-                    return;
+                CsvEditorPanel targetPanel = null;
+                boolean changed = false;
+                for (CsvDocument document : documents) {
+                    if (document == null) {
+                        continue;
+                    }
+                    Path key = normalize(document.getFilePath());
+                    CsvEditorPanel existing = panelsByPath.get(key);
+                    if (existing != null) {
+                        targetPanel = existing;
+                        continue;
+                    }
+
+                    CsvEditorPanel panel = createEditorPanel(document);
+                    panelsByPath.put(key, panel);
+                    targetPanel = panel;
+                    changed = true;
                 }
-
-                final CsvEditorPanel panel = new CsvEditorPanel(document, documentService);
-                if (shouldAutoCollapse(document)) {
-                    panel.setCollapsed(true);
+                if (changed) {
+                    rebuildContentPanel();
+                    notifySessionChanged();
                 }
-                panel.setRowClipboardDelimiter(rowClipboardDelimiter);
-                panel.setAlignmentX(Component.LEFT_ALIGNMENT);
-                panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, panel.getPreferredSize().height));
-                panel.setCloseRequestListener(new CsvEditorPanel.CloseRequestListener() {
-                    @Override
-                    public void closeRequested(CsvEditorPanel requestedPanel) {
-                        closePanel(requestedPanel);
-                    }
-                });
-                panel.setMoveRequestListener(new CsvEditorPanel.MoveRequestListener() {
-                    @Override
-                    public void moveUpRequested(CsvEditorPanel requestedPanel) {
-                        movePanel(requestedPanel, -1);
-                    }
-
-                    @Override
-                    public void moveDownRequested(CsvEditorPanel requestedPanel) {
-                        movePanel(requestedPanel, 1);
-                    }
-                });
-                panel.setTableSelectionListener(new CsvEditorPanel.TableSelectionListener() {
-                    @Override
-                    public void tableSelectionChanged(CsvEditorPanel selectedPanel) {
-                        setActiveGroupKey(getGroupKey(selectedPanel));
-                        clearOtherTableSelections(selectedPanel);
-                    }
-                });
-
-                panelsByPath.put(key, panel);
-                rebuildContentPanel();
-                setActiveGroupKey(getGroupKey(panel));
-                notifySessionChanged();
-                scrollToPanel(panel);
+                if (targetPanel != null) {
+                    setActiveGroupKey(getGroupKey(targetPanel));
+                    scrollToPanel(targetPanel);
+                    targetPanel.requestFocusInWindow();
+                }
             }
         });
+    }
+
+    private CsvEditorPanel createEditorPanel(final CsvDocument document) {
+        final CsvEditorPanel panel = new CsvEditorPanel(document, documentService);
+        if (shouldAutoCollapse(document)) {
+            panel.setCollapsed(true);
+        }
+        panel.setRowClipboardDelimiter(rowClipboardDelimiter);
+        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, panel.getPreferredSize().height));
+        panel.setCloseRequestListener(new CsvEditorPanel.CloseRequestListener() {
+            @Override
+            public void closeRequested(CsvEditorPanel requestedPanel) {
+                closePanel(requestedPanel);
+            }
+        });
+        panel.setMoveRequestListener(new CsvEditorPanel.MoveRequestListener() {
+            @Override
+            public void moveUpRequested(CsvEditorPanel requestedPanel) {
+                movePanel(requestedPanel, -1);
+            }
+
+            @Override
+            public void moveDownRequested(CsvEditorPanel requestedPanel) {
+                movePanel(requestedPanel, 1);
+            }
+        });
+        panel.setTableSelectionListener(new CsvEditorPanel.TableSelectionListener() {
+            @Override
+            public void tableSelectionChanged(CsvEditorPanel selectedPanel) {
+                setActiveGroupKey(getGroupKey(selectedPanel));
+                clearOtherTableSelections(selectedPanel);
+            }
+        });
+        return panel;
     }
 
     public boolean hasOpenDocument(Path filePath) {
@@ -311,16 +334,33 @@ public class CsvStackPanel extends JScrollPane {
     }
 
     public boolean requestCloseAll() {
-        List<CsvEditorPanel> openPanels = getOpenPanels();
-        for (CsvEditorPanel panel : openPanels) {
+        if (!confirmCloseAllForApplicationExit()) {
+            return false;
+        }
+        closeAllConfirmed();
+        return true;
+    }
+
+    public boolean confirmCloseAllForApplicationExit() {
+        for (CsvEditorPanel panel : getOpenPanels()) {
             if (!panel.confirmForApplicationExit(this)) {
                 return false;
             }
         }
-        for (CsvEditorPanel panel : openPanels) {
-            closePanel(panel);
-        }
         return true;
+    }
+
+    public void closeAllConfirmed() {
+        if (panelsByPath.isEmpty()) {
+            return;
+        }
+        panelsByPath.clear();
+        if (activeGroupKey != null) {
+            activeGroupKey = null;
+            notifyActiveGroupChanged();
+        }
+        rebuildContentPanel();
+        notifySessionChanged();
     }
 
     public void requestCloseGroup(String groupKey) {

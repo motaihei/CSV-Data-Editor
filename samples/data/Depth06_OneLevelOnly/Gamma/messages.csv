@@ -1,3 +1,0 @@
-message_id,text,expected_group
-G-001,one level sample,Gamma
-G-002,folder name should be used by fallback,Gamma

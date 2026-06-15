@@ -1,3 +1,0 @@
-id,name,expected_group,note
-1,Alpha customer 1,Alpha,Root has exactly one directory level before this CSV
-2,Alpha customer 2,Alpha,No second directory exists

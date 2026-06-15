@@ -15,6 +15,11 @@ public final class CsvEditorApp {
     }
 
     public static void main(String[] args) {
+        if (isShutdownRequest(args)) {
+            System.exit(ShutdownRequestServer.requestExistingShutdown());
+            return;
+        }
+
         final SingleInstanceLock instanceLock;
         try {
             instanceLock = SingleInstanceLock.acquire();
@@ -36,9 +41,34 @@ public final class CsvEditorApp {
         SwingUtilities.invokeLater(new Runnable() {
             @Override
             public void run() {
-                new MainFrame().setVisible(true);
+                final MainFrame frame = new MainFrame();
+                installShutdownRequestServer(frame);
+                frame.setVisible(true);
             }
         });
+    }
+
+    private static boolean isShutdownRequest(String[] args) {
+        return args != null && args.length == 1 && ShutdownRequestServer.SHUTDOWN_ARGUMENT.equals(args[0]);
+    }
+
+    private static void installShutdownRequestServer(final MainFrame frame) {
+        try {
+            final ShutdownRequestServer shutdownServer = ShutdownRequestServer.start(new Runnable() {
+                @Override
+                public void run() {
+                    frame.requestCloseWindow();
+                }
+            });
+            Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    shutdownServer.closeQuietly();
+                }
+            }, "csv-editor-shutdown-server-close"));
+        } catch (IOException ignored) {
+            // The legacy CloseMainWindow launcher fallback can still request shutdown.
+        }
     }
 
     private static void showAlreadyRunningMessage() {

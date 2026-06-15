@@ -1,3 +1,0 @@
-order_id,total,expected_group,note
-B-001,1200,Beta,Only one folder exists between root and file
-B-002,3400,Beta,Useful for fallback behavior checks

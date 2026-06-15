@@ -24,6 +24,7 @@ import javax.swing.JTextField;
 import javax.swing.JToolBar;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.Timer;
 import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -105,7 +106,7 @@ public class MainFrame extends JFrame {
         buildUi();
         installListeners();
         installGlobalKeyBindings();
-        loadLastRootFolder();
+        scheduleInitialLoad();
     }
 
     private void buildUi() {
@@ -182,8 +183,14 @@ public class MainFrame extends JFrame {
                     loadingOverlayLabel.setText(message == null ? "読み込み中..." : message);
                 }
                 if (loadingOverlayPanel != null) {
+                    if (loadingOverlayProgressBar != null) {
+                        loadingOverlayProgressBar.setIndeterminate(false);
+                        loadingOverlayProgressBar.setIndeterminate(true);
+                    }
                     loadingOverlayPanel.setVisible(true);
                     loadingOverlayPanel.requestFocusInWindow();
+                    loadingOverlayPanel.revalidate();
+                    loadingOverlayPanel.repaint();
                 }
                 setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
             }
@@ -193,6 +200,15 @@ public class MainFrame extends JFrame {
         } else {
             SwingUtilities.invokeLater(task);
         }
+    }
+
+    private void scheduleInitialLoad() {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                loadLastRootFolder();
+            }
+        });
     }
 
     private void endBlockingWork() {
@@ -567,9 +583,7 @@ public class MainFrame extends JFrame {
                 try {
                     csvStackPanel.setDataGroupingEnabled(sessionDataGroupingEnabled);
                     csvStackPanel.setCollapsedGroupKeys(collapsedGroups);
-                    for (CsvDocument document : get()) {
-                        csvStackPanel.addOrFocusDocument(document);
-                    }
+                    csvStackPanel.addOrFocusDocuments(get());
                     csvStackPanel.setCollapsedGroupKeys(collapsedGroups);
                     updateOpenGroupList();
                     statusBar.setMessage("Restored previous open CSV files.");
@@ -847,9 +861,7 @@ public class MainFrame extends JFrame {
             protected void done() {
                 try {
                     OpenCsvBatchResult result = get();
-                    for (CsvDocument document : result.documents) {
-                        csvStackPanel.addOrFocusDocument(document);
-                    }
+                    csvStackPanel.addOrFocusDocuments(result.documents);
                     if (result.failedPaths.isEmpty()) {
                         statusBar.setMessage("Opened CSV files: " + result.documents.size());
                     } else {
@@ -1099,14 +1111,36 @@ public class MainFrame extends JFrame {
         }
     }
 
+    public void requestCloseWindow() {
+        closeWindow();
+    }
+
     private void closeWindow() {
         saveOpenSession();
-        suppressSessionSaving = true;
-        if (csvStackPanel.requestCloseAll()) {
-            dispose();
-        } else {
-            suppressSessionSaving = false;
+        if (!csvStackPanel.confirmCloseAllForApplicationExit()) {
+            return;
         }
+
+        beginBlockingWork("閉じています...");
+        suppressSessionSaving = true;
+        Timer closeTimer = new Timer(100, null);
+        closeTimer.setRepeats(false);
+        closeTimer.addActionListener(event -> {
+            closeTimer.stop();
+            boolean disposed = false;
+            try {
+                csvStackPanel.closeAllConfirmed();
+                dispose();
+                disposed = true;
+                System.exit(0);
+            } finally {
+                if (!disposed) {
+                    suppressSessionSaving = false;
+                    endBlockingWork();
+                }
+            }
+        });
+        closeTimer.start();
     }
 
     private void showError(String message, Exception ex) {

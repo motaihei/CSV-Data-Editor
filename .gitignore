@@ -4,6 +4,9 @@ dist/
 dependency-reduced-pom.xml
 release.properties
 
+# Sample CSV data kept local only
+samples/data/
+
 # Java build artifacts
 *.class
 *.jar
