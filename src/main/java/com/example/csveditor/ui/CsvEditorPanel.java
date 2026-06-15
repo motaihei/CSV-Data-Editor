@@ -84,7 +84,11 @@ public final class CsvEditorPanel extends JPanel {
 
     private final CsvDocumentService documentService;
     private static final int MAX_UNDO_HISTORY = 5;
+    private static final int OPEN_FOLDER_BUTTON_WIDTH = 112;
+    private static final int TABLE_HORIZONTAL_SCROLL_BAR_HEIGHT = 8;
     private static final Color DIRTY_BACKGROUND = new Color(255, 250, 218);
+    private static final Color COLLAPSED_BACKGROUND = new Color(198, 198, 198);
+    private static final Color COLLAPSED_DIRTY_BACKGROUND = new Color(210, 204, 178);
     private static final Color PIVOT_TABLE_BORDER = new Color(73, 178, 205);
     private static final String DEFAULT_ROW_CLIPBOARD_DELIMITER = "\t";
     private CsvDocument document;
@@ -376,7 +380,7 @@ public final class CsvEditorPanel extends JPanel {
         saveButton = createCompactButton("保存");
         reloadButton = createCompactButton("再読込");
         closeButton = createCompactButton("閉じる");
-        openFolderButton = createCompactButton("Explorer");
+        openFolderButton = createCompactButton("フォルダを開く");
         moveUpButton = createCompactButton("↑");
         moveDownButton = createCompactButton("↓");
         collapseButton = createCompactButton("▾");
@@ -424,7 +428,7 @@ public final class CsvEditorPanel extends JPanel {
         moveButtonsContentPanel.setLayout(new BoxLayout(moveButtonsContentPanel, BoxLayout.Y_AXIS));
         moveButtonsContentPanel.setOpaque(false);
         JPanel moveButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 1, 0));
-        Dimension moveButtonRowSize = new Dimension(74, 20);
+        Dimension moveButtonRowSize = new Dimension(OPEN_FOLDER_BUTTON_WIDTH, 20);
         moveButtonRow.setPreferredSize(moveButtonRowSize);
         moveButtonRow.setMinimumSize(moveButtonRowSize);
         moveButtonRow.setMaximumSize(moveButtonRowSize);
@@ -433,7 +437,7 @@ public final class CsvEditorPanel extends JPanel {
         moveButtonRow.add(moveUpButton);
         moveButtonRow.add(moveDownButton);
         moveButtonRow.add(collapseButton);
-        Dimension openFolderButtonSize = new Dimension(72, 22);
+        Dimension openFolderButtonSize = new Dimension(OPEN_FOLDER_BUTTON_WIDTH, 22);
         openFolderButton.setPreferredSize(openFolderButtonSize);
         openFolderButton.setMinimumSize(openFolderButtonSize);
         openFolderButton.setMaximumSize(openFolderButtonSize);
@@ -441,7 +445,7 @@ public final class CsvEditorPanel extends JPanel {
         moveButtonsContentPanel.add(moveButtonRow);
         moveButtonsContentPanel.add(openFolderButton);
         moveButtonsPanel.add(moveButtonsContentPanel, BorderLayout.NORTH);
-        Dimension moveButtonsPanelSize = new Dimension(74, 44);
+        Dimension moveButtonsPanelSize = new Dimension(OPEN_FOLDER_BUTTON_WIDTH, 44);
         moveButtonsPanel.setPreferredSize(moveButtonsPanelSize);
         moveButtonsPanel.setMinimumSize(moveButtonsPanelSize);
         moveButtonsPanel.setMaximumSize(moveButtonsPanelSize);
@@ -508,6 +512,7 @@ public final class CsvEditorPanel extends JPanel {
         tableScrollPane.setBorder(BorderFactory.createEmptyBorder());
         tableScrollPane.setViewportBorder(null);
         tableScrollPane.setWheelScrollingEnabled(false);
+        configureTableHorizontalScrollBar(tableScrollPane);
         installTableResizeHandler();
         installTableMouseWheelForwarding();
         tableWidth = calculateAutomaticTableWidth();
@@ -1163,6 +1168,19 @@ public final class CsvEditorPanel extends JPanel {
                 : tableScrollPane.getHorizontalScrollBar().getPreferredSize().height;
     }
 
+    private void configureTableHorizontalScrollBar(JScrollPane scrollPane) {
+        JScrollBar horizontalBar = scrollPane.getHorizontalScrollBar();
+        if (horizontalBar == null) {
+            return;
+        }
+        Dimension preferredSize = horizontalBar.getPreferredSize();
+        Dimension minimumSize = horizontalBar.getMinimumSize();
+        Dimension maximumSize = horizontalBar.getMaximumSize();
+        horizontalBar.setPreferredSize(new Dimension(preferredSize.width, TABLE_HORIZONTAL_SCROLL_BAR_HEIGHT));
+        horizontalBar.setMinimumSize(new Dimension(minimumSize.width, TABLE_HORIZONTAL_SCROLL_BAR_HEIGHT));
+        horizontalBar.setMaximumSize(new Dimension(maximumSize.width, TABLE_HORIZONTAL_SCROLL_BAR_HEIGHT));
+    }
+
     private void installTableResizeHandler() {
         MouseAdapter resizeHandler = new MouseAdapter() {
             @Override
@@ -1356,8 +1374,8 @@ public final class CsvEditorPanel extends JPanel {
             width = 56;
         } else if ("閉じる".equals(button.getText())) {
             width = 54;
-        } else if ("Explorer".equals(button.getText())) {
-            width = 72;
+        } else if ("フォルダを開く".equals(button.getText())) {
+            width = OPEN_FOLDER_BUTTON_WIDTH;
         } else if ("↑".equals(button.getText()) || "↓".equals(button.getText())
                 || "▾".equals(button.getText()) || "▸".equals(button.getText())) {
             button.setMargin(new Insets(0, 0, 0, 0));
@@ -1580,8 +1598,9 @@ public final class CsvEditorPanel extends JPanel {
     }
 
     private void updatePanelBackground() {
-        Color background = document.isDirty() ? DIRTY_BACKGROUND : getDefaultPanelBackground();
-        setBackground(background);
+        Color background = getPanelBackground();
+        Color outerBackground = collapsed ? getDefaultPanelBackground() : background;
+        setBackground(outerBackground);
         if (csvContentPanel != null) {
             csvContentPanel.setBackground(background);
         }
@@ -1607,9 +1626,16 @@ public final class CsvEditorPanel extends JPanel {
             tableToolPanel.setBackground(background);
         }
         if (moveButtonsPanel != null) {
-            moveButtonsPanel.setBackground(background);
+            moveButtonsPanel.setBackground(outerBackground);
         }
         repaint();
+    }
+
+    private Color getPanelBackground() {
+        if (document.isDirty()) {
+            return collapsed ? COLLAPSED_DIRTY_BACKGROUND : DIRTY_BACKGROUND;
+        }
+        return collapsed ? COLLAPSED_BACKGROUND : getDefaultPanelBackground();
     }
 
     private static Color getDefaultPanelBackground() {

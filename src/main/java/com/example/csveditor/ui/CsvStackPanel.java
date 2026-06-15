@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -63,6 +64,7 @@ public class CsvStackPanel extends JScrollPane {
     private boolean suppressVisibleGroupTracking;
     private String rowClipboardDelimiter = "\t";
     private String activeGroupKey;
+    private String csvFileNameFilter = "";
     private int autoCollapseRowThreshold;
     private int dataGroupPathSegmentLevel = 2;
 
@@ -188,6 +190,15 @@ public class CsvStackPanel extends JScrollPane {
 
     public List<CsvEditorPanel> getOpenPanels() {
         return new ArrayList<CsvEditorPanel>(panelsByPath.values());
+    }
+
+    public void setCsvFileNameFilter(String filterText) {
+        String normalizedFilter = normalizeFilterText(filterText);
+        if (normalizedFilter.equals(csvFileNameFilter)) {
+            return;
+        }
+        csvFileNameFilter = normalizedFilter;
+        rebuildContentPanel();
     }
 
     public List<String> getOpenRelativePaths() {
@@ -469,9 +480,10 @@ public class CsvStackPanel extends JScrollPane {
             if (!dataGroupingEnabled) {
                 setActiveGroupKey(null);
                 List<CsvEditorPanel> panels = new ArrayList<CsvEditorPanel>(panelsByPath.values());
-                for (int i = 0; i < panels.size(); i++) {
-                    CsvEditorPanel panel = panels.get(i);
-                    panel.setMoveAvailability(i > 0, i < panels.size() - 1);
+                List<CsvEditorPanel> visiblePanels = filterPanelsByFileName(panels);
+                for (int i = 0; i < visiblePanels.size(); i++) {
+                    CsvEditorPanel panel = visiblePanels.get(i);
+                    panel.setMoveAvailability(i > 0, i < visiblePanels.size() - 1);
                     contentPanel.add(panel);
                     contentPanel.add(Box.createVerticalStrut(6));
                 }
@@ -501,16 +513,19 @@ public class CsvStackPanel extends JScrollPane {
                 boolean active = groupKey.equals(activeGroupKey);
                 JPanel groupPanel = createGroupPanel(groupKey, active);
                 JPanel bodyPanel = createGroupBodyPanel(active);
-                List<CsvEditorPanel> groupPanels = entry.getValue();
+                List<CsvEditorPanel> groupPanels = filterPanelsByFileName(entry.getValue());
+                if (isCsvFileNameFilterActive() && groupPanels.isEmpty()) {
+                    continue;
+                }
                 for (int i = 0; i < groupPanels.size(); i++) {
                     CsvEditorPanel panel = groupPanels.get(i);
                     panel.setMoveAvailability(i > 0, i < groupPanels.size() - 1);
-                    if (!collapsedGroupKeys.contains(groupKey)) {
+                    if (isCsvFileNameFilterActive() || !collapsedGroupKeys.contains(groupKey)) {
                         bodyPanel.add(panel);
                         bodyPanel.add(Box.createVerticalStrut(6));
                     }
                 }
-                if (!collapsedGroupKeys.contains(groupKey)) {
+                if (isCsvFileNameFilterActive() || !collapsedGroupKeys.contains(groupKey)) {
                     groupPanel.add(bodyPanel, BorderLayout.CENTER);
                 }
                 JPanel groupSectionPanel = createGroupSectionPanel(groupPanel, active);
@@ -524,6 +539,33 @@ public class CsvStackPanel extends JScrollPane {
         } finally {
             rebuildingContentPanel = false;
         }
+    }
+
+    private List<CsvEditorPanel> filterPanelsByFileName(List<CsvEditorPanel> panels) {
+        List<CsvEditorPanel> filteredPanels = new ArrayList<CsvEditorPanel>();
+        for (CsvEditorPanel panel : panels) {
+            if (matchesCsvFileNameFilter(panel)) {
+                filteredPanels.add(panel);
+            }
+        }
+        return filteredPanels;
+    }
+
+    private boolean matchesCsvFileNameFilter(CsvEditorPanel panel) {
+        if (!isCsvFileNameFilterActive()) {
+            return true;
+        }
+        String fileName = panel.getDocument().getFileName();
+        return fileName != null
+                && fileName.toLowerCase(Locale.ROOT).contains(csvFileNameFilter);
+    }
+
+    private boolean isCsvFileNameFilterActive() {
+        return csvFileNameFilter.length() > 0;
+    }
+
+    private static String normalizeFilterText(String filterText) {
+        return filterText == null ? "" : filterText.trim().toLowerCase(Locale.ROOT);
     }
 
     public void refreshOpenTableSizes() {

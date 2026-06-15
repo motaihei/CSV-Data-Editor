@@ -25,6 +25,8 @@ import javax.swing.JToolBar;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -67,6 +69,7 @@ public class MainFrame extends JFrame {
     private final Preferences preferences;
     private JSplitPane leftSplitPane;
     private JTextField columnWidthField;
+    private JTextField csvSearchField;
     private JPanel loadingOverlayPanel;
     private JLabel loadingOverlayLabel;
     private JProgressBar loadingOverlayProgressBar;
@@ -124,7 +127,8 @@ public class MainFrame extends JFrame {
         leftSplitPane.setDividerLocation(300);
         updateDataGroupListVisibility();
 
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftSplitPane, csvStackPanel);
+        JPanel rightPanel = createRightPanel();
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftSplitPane, rightPanel);
         splitPane.setResizeWeight(0.0);
         splitPane.setDividerLocation(474);
         add(splitPane, BorderLayout.CENTER);
@@ -264,21 +268,89 @@ public class MainFrame extends JFrame {
         JToolBar toolBar = new JToolBar();
         toolBar.setFloatable(false);
 
-        JButton openRootButton = new JButton("Add Root");
+        JButton openRootButton = new JButton("ルートフォルダ追加");
         openRootButton.addActionListener(e -> chooseRootFolder());
         toolBar.add(openRootButton);
 
-        JButton saveAllButton = new JButton("Save All");
+        JButton saveAllButton = new JButton("全保存");
         saveAllButton.addActionListener(e -> saveAll());
         toolBar.add(saveAllButton);
 
         toolBar.add(Box.createHorizontalGlue());
 
+        JButton settingsButton = new JButton("設定");
+        settingsButton.addActionListener(e -> showSettingsDialog());
+        toolBar.add(settingsButton);
+
+        return toolBar;
+    }
+
+    private JPanel createRightPanel() {
+        JPanel rightPanel = new JPanel(new BorderLayout());
+        rightPanel.add(createCsvSearchBar(), BorderLayout.NORTH);
+        rightPanel.add(csvStackPanel, BorderLayout.CENTER);
+        return rightPanel;
+    }
+
+    private JToolBar createCsvSearchBar() {
+        JToolBar searchBar = new JToolBar();
+        searchBar.setFloatable(false);
+        searchBar.setLayout(new GridBagLayout());
+        csvSearchField = new JTextField();
+        Dimension csvSearchFieldSize = new Dimension(360, 24);
+        csvSearchField.setPreferredSize(csvSearchFieldSize);
+        csvSearchField.setMinimumSize(csvSearchFieldSize);
+        csvSearchField.setMaximumSize(csvSearchFieldSize);
+        csvSearchField.setToolTipText("開いているCSVパネルをCSVファイル名で絞り込みます。");
+        JButton clearCsvSearchButton = new JButton("クリア");
+        clearCsvSearchButton.setEnabled(false);
+        clearCsvSearchButton.addActionListener(e -> csvSearchField.setText(""));
+        csvSearchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent event) {
+                updateSearchFilterAndButton();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent event) {
+                updateSearchFilterAndButton();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent event) {
+                updateSearchFilterAndButton();
+            }
+
+            private void updateSearchFilterAndButton() {
+                updateCsvPanelSearchFilter();
+                clearCsvSearchButton.setEnabled(!csvSearchField.getText().isEmpty());
+            }
+        });
+        GridBagConstraints constraints = createCsvSearchBarConstraints(0, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(createToolBarGroup(new JLabel("検索"), csvSearchField, clearCsvSearchButton), constraints);
+        constraints = createCsvSearchBarConstraints(1, 1.0d, GridBagConstraints.HORIZONTAL);
+        searchBar.add(Box.createHorizontalGlue(), constraints);
+        constraints = createCsvSearchBarConstraints(2, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(createCloseAllCsvToolBarGroup(), constraints);
+        constraints = createCsvSearchBarConstraints(3, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
+        constraints = createCsvSearchBarConstraints(4, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(createColumnWidthToolBarGroup(), constraints);
+        return searchBar;
+    }
+
+    private static GridBagConstraints createCsvSearchBarConstraints(int gridx, double weightx, int fill) {
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.gridx = gridx;
+        constraints.gridy = 0;
+        constraints.weightx = weightx;
+        constraints.fill = fill;
+        constraints.anchor = GridBagConstraints.CENTER;
+        return constraints;
+    }
+
+    private JPanel createColumnWidthToolBarGroup() {
         columnWidthField = new JTextField("110");
-        Dimension columnWidthFieldSize = new Dimension(48, 24);
-        columnWidthField.setPreferredSize(columnWidthFieldSize);
-        columnWidthField.setMinimumSize(columnWidthFieldSize);
-        columnWidthField.setMaximumSize(columnWidthFieldSize);
         columnWidthField.setToolTipText("表示中のCSVテーブルへ適用する列幅をpxで指定します。");
         columnWidthField.addActionListener(e -> applyColumnWidthToOpenTables());
 
@@ -286,23 +358,24 @@ public class MainFrame extends JFrame {
         applyColumnWidthButton.setToolTipText("表示中のCSVテーブルすべての列幅を指定値に変更します。");
         applyColumnWidthButton.addActionListener(e -> applyColumnWidthToOpenTables());
 
+        int controlHeight = applyColumnWidthButton.getPreferredSize().height;
+        Dimension columnWidthFieldSize = new Dimension(48, controlHeight);
+        columnWidthField.setPreferredSize(columnWidthFieldSize);
+        columnWidthField.setMinimumSize(columnWidthFieldSize);
+        columnWidthField.setMaximumSize(columnWidthFieldSize);
+
         JButton autoFitColumnWidthButton = new JButton("列幅を全自動調整");
         autoFitColumnWidthButton.setToolTipText("表示中のCSVテーブルすべての列幅を列名とセル値に合わせて自動調整します。");
         autoFitColumnWidthButton.addActionListener(e -> autoFitColumnWidthsForOpenTables());
-        toolBar.add(createToolBarGroup(autoFitColumnWidthButton, applyColumnWidthButton, columnWidthField));
-        toolBar.addSeparator(new Dimension(10, 0));
 
+        return createToolBarGroup(autoFitColumnWidthButton, applyColumnWidthButton, columnWidthField);
+    }
+
+    private JPanel createCloseAllCsvToolBarGroup() {
         JButton closeAllCsvButton = new JButton("すべて閉じる");
         closeAllCsvButton.setToolTipText("表示中のCSVパネルをすべて閉じます。");
         closeAllCsvButton.addActionListener(e -> closeAllOpenCsvPanels());
-        toolBar.add(createToolBarGroup(closeAllCsvButton));
-        toolBar.addSeparator(new Dimension(10, 0));
-
-        JButton settingsButton = new JButton("設定");
-        settingsButton.addActionListener(e -> showSettingsDialog());
-        toolBar.add(createToolBarGroup(settingsButton));
-
-        return toolBar;
+        return createToolBarGroup(closeAllCsvButton);
     }
 
     private static JPanel createToolBarGroup(JComponent... components) {
@@ -1101,6 +1174,10 @@ public class MainFrame extends JFrame {
     private void autoFitColumnWidthsForOpenTables() {
         csvStackPanel.autoFitColumnWidthsForOpenPanels();
         statusBar.setMessage("Auto-fitted column widths for open CSV tables.");
+    }
+
+    private void updateCsvPanelSearchFilter() {
+        csvStackPanel.setCsvFileNameFilter(csvSearchField == null ? "" : csvSearchField.getText());
     }
 
     private void closeAllOpenCsvPanels() {
