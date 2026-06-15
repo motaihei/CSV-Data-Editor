@@ -12,24 +12,33 @@ import javax.swing.Box;
 import javax.swing.JComponent;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
+import javax.swing.JLabel;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JProgressBar;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
 import javax.swing.JToolBar;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Graphics;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.Image;
 import java.awt.Toolkit;
 import java.awt.event.InputEvent;
+import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
@@ -57,18 +66,27 @@ public class MainFrame extends JFrame {
     private final Preferences preferences;
     private JSplitPane leftSplitPane;
     private JTextField columnWidthField;
-    private Path rootDirectory;
+    private JPanel loadingOverlayPanel;
+    private JLabel loadingOverlayLabel;
+    private JProgressBar loadingOverlayProgressBar;
+    private int loadingOverlayDepth;
+    private final List<Path> rootDirectories;
     private boolean restoringSession;
     private boolean suppressSessionSaving;
     private static final String LAST_ROOT_FOLDER_KEY = "lastRootFolder";
+    private static final String LAST_ROOT_FOLDERS_KEY = "lastRootFolders";
     private static final String SESSION_ROOT_FOLDER_KEY = "sessionRootFolder";
     private static final String SESSION_OPEN_FILES_KEY = "sessionOpenFiles";
     private static final String SESSION_COLLAPSED_GROUPS_KEY = "sessionCollapsedGroups";
     private static final String SESSION_DATA_GROUPING_ENABLED_KEY = "sessionDataGroupingEnabled";
     private static final String DATA_GROUPING_ENABLED_KEY = "dataGroupingEnabled";
     private static final String ROW_CLIPBOARD_DELIMITER_TYPE_KEY = "rowClipboardDelimiterType";
+    private static final String AUTO_COLLAPSE_ROW_THRESHOLD_KEY = "autoCollapseRowThreshold";
+    private static final String DATA_GROUP_PATH_SEGMENT_LEVEL_KEY = "dataGroupPathSegmentLevel";
     private static final String GROUPED_MODE_SUFFIX = ".grouped";
     private static final String FLAT_MODE_SUFFIX = ".flat";
+    private static final int PREFERENCE_VALUE_CHUNK_SIZE = 6000;
+    private static final String PREFERENCE_CHUNK_COUNT_SUFFIX = ".chunkCount";
 
     public MainFrame() {
         super("CSV Data Editor");
@@ -79,8 +97,11 @@ public class MainFrame extends JFrame {
         this.csvStackPanel = new CsvStackPanel(documentService);
         this.statusBar = new StatusBar();
         this.preferences = Preferences.userNodeForPackage(MainFrame.class);
+        this.rootDirectories = new ArrayList<Path>();
         this.csvStackPanel.setDataGroupingEnabled(preferences.getBoolean(DATA_GROUPING_ENABLED_KEY, true));
         this.csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter());
+        this.csvStackPanel.setAutoCollapseRowThreshold(getAutoCollapseRowThreshold());
+        this.csvStackPanel.setDataGroupPathSegmentLevel(getDataGroupPathSegmentLevel());
         buildUi();
         installListeners();
         installGlobalKeyBindings();
@@ -113,13 +134,94 @@ public class MainFrame extends JFrame {
         int startupWidth = (int) Math.round(startupHeight * 16d / 9d);
         setSize(Math.min(startupWidth, screenSize.width), startupHeight);
         setLocationRelativeTo(null);
+        installLoadingOverlay();
+    }
+
+    private void installLoadingOverlay() {
+        loadingOverlayPanel = new JPanel(new GridBagLayout()) {
+            @Override
+            protected void paintComponent(Graphics graphics) {
+                super.paintComponent(graphics);
+                graphics.setColor(new Color(0, 0, 0, 72));
+                graphics.fillRect(0, 0, getWidth(), getHeight());
+            }
+        };
+        loadingOverlayPanel.setOpaque(false);
+        loadingOverlayPanel.setFocusTraversalKeysEnabled(false);
+        loadingOverlayPanel.addMouseListener(new MouseAdapter() {
+        });
+        loadingOverlayPanel.addMouseMotionListener(new MouseAdapter() {
+        });
+        loadingOverlayPanel.addKeyListener(new KeyAdapter() {
+        });
+
+        JPanel messagePanel = new JPanel(new BorderLayout(10, 8));
+        messagePanel.setBackground(new Color(250, 250, 250));
+        messagePanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(120, 150, 170)),
+                BorderFactory.createEmptyBorder(14, 18, 14, 18)));
+
+        loadingOverlayLabel = new JLabel("読み込み中...");
+        loadingOverlayProgressBar = new JProgressBar();
+        loadingOverlayProgressBar.setIndeterminate(true);
+        loadingOverlayProgressBar.setPreferredSize(new Dimension(240, 18));
+        messagePanel.add(loadingOverlayLabel, BorderLayout.NORTH);
+        messagePanel.add(loadingOverlayProgressBar, BorderLayout.CENTER);
+
+        loadingOverlayPanel.add(messagePanel, new GridBagConstraints());
+        loadingOverlayPanel.setVisible(false);
+        setGlassPane(loadingOverlayPanel);
+    }
+
+    private void beginBlockingWork(final String message) {
+        Runnable task = new Runnable() {
+            @Override
+            public void run() {
+                loadingOverlayDepth++;
+                if (loadingOverlayLabel != null) {
+                    loadingOverlayLabel.setText(message == null ? "読み込み中..." : message);
+                }
+                if (loadingOverlayPanel != null) {
+                    loadingOverlayPanel.setVisible(true);
+                    loadingOverlayPanel.requestFocusInWindow();
+                }
+                setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+            }
+        };
+        if (SwingUtilities.isEventDispatchThread()) {
+            task.run();
+        } else {
+            SwingUtilities.invokeLater(task);
+        }
+    }
+
+    private void endBlockingWork() {
+        Runnable task = new Runnable() {
+            @Override
+            public void run() {
+                if (loadingOverlayDepth > 0) {
+                    loadingOverlayDepth--;
+                }
+                if (loadingOverlayDepth == 0) {
+                    if (loadingOverlayPanel != null) {
+                        loadingOverlayPanel.setVisible(false);
+                    }
+                    setCursor(Cursor.getDefaultCursor());
+                }
+            }
+        };
+        if (SwingUtilities.isEventDispatchThread()) {
+            task.run();
+        } else {
+            SwingUtilities.invokeLater(task);
+        }
     }
 
     private JMenuBar createMenuBar() {
         JMenuBar menuBar = new JMenuBar();
         JMenu fileMenu = new JMenu("File");
 
-        JMenuItem openRootItem = new JMenuItem("Open Root Folder...");
+        JMenuItem openRootItem = new JMenuItem("Add Root Folder...");
         openRootItem.addActionListener(e -> chooseRootFolder());
         fileMenu.add(openRootItem);
 
@@ -146,7 +248,7 @@ public class MainFrame extends JFrame {
         JToolBar toolBar = new JToolBar();
         toolBar.setFloatable(false);
 
-        JButton openRootButton = new JButton("Open Root");
+        JButton openRootButton = new JButton("Add Root");
         openRootButton.addActionListener(e -> chooseRootFolder());
         toolBar.add(openRootButton);
 
@@ -210,6 +312,12 @@ public class MainFrame extends JFrame {
                 openCsvFiles(nodes);
             }
         });
+        treePanel.setRootFolderRegistrationListener(new CsvDataTreePanel.RootFolderRegistrationListener() {
+            @Override
+            public void rootFolderUnregisterRequested(DataNode node) {
+                unregisterRootFolder(node);
+            }
+        });
         csvStackPanel.setSessionChangeListener(new CsvStackPanel.SessionChangeListener() {
             @Override
             public void sessionChanged() {
@@ -260,48 +368,59 @@ public class MainFrame extends JFrame {
     }
 
     private void chooseRootFolder() {
-        JFileChooser chooser = new JFileChooser(rootDirectory == null ? null : rootDirectory.toFile());
+        Path initialRoot = rootDirectories.isEmpty() ? null : rootDirectories.get(rootDirectories.size() - 1);
+        JFileChooser chooser = new JFileChooser(initialRoot == null ? null : initialRoot.toFile());
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        chooser.setDialogTitle("Select root folder");
+        chooser.setMultiSelectionEnabled(true);
+        chooser.setDialogTitle("Select root folders");
         int result = chooser.showOpenDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
-            File selectedFolder = chooser.getSelectedFile();
-            Path selectedRoot = selectedFolder.toPath().toAbsolutePath().normalize();
-            if (rootDirectory != null
-                    && !rootDirectory.equals(selectedRoot)
-                    && !csvStackPanel.getOpenPanels().isEmpty()
-                    && !csvStackPanel.requestCloseAll()) {
+            List<Path> selectedRoots = normalizeSelectedRootFolders(chooser);
+            if (selectedRoots.isEmpty()) {
                 return;
             }
-            loadRootFolder(selectedFolder);
+            List<Path> mergedRoots = mergeRootDirectories(rootDirectories, selectedRoots);
+            if (mergedRoots.equals(rootDirectories)) {
+                statusBar.setMessage("Root folder is already loaded.");
+                return;
+            }
+            loadRootFolders(mergedRoots);
         }
     }
 
     private void loadRootFolder(File rootFolder) {
-        final Path selectedRoot = rootFolder.toPath().toAbsolutePath().normalize();
-        statusBar.showLoading("Loading folder: " + selectedRoot);
-        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+        List<Path> roots = new ArrayList<Path>();
+        roots.add(rootFolder.toPath().toAbsolutePath().normalize());
+        loadRootFolders(roots);
+    }
+
+    private void loadRootFolders(final List<Path> selectedRoots) {
+        statusBar.showLoading("Loading folders: " + joinDisplayPaths(selectedRoots));
+        beginBlockingWork("フォルダーを読み込んでいます...");
 
         SwingWorker<DataNode, Void> worker = new SwingWorker<DataNode, Void>() {
             @Override
             protected DataNode doInBackground() throws Exception {
-                return scanService.scan(selectedRoot);
+                return scanService.scan(selectedRoots);
             }
 
             @Override
             protected void done() {
-                setCursor(Cursor.getDefaultCursor());
                 try {
                     DataNode rootNode = get();
-                    rootDirectory = selectedRoot;
-                    saveLastRootFolder(selectedRoot);
+                    rootDirectories.clear();
+                    rootDirectories.addAll(selectedRoots);
+                    saveLastRootFolders(selectedRoots);
+                    treePanel.setRegisteredRootPaths(rootDirectories);
                     treePanel.setRootNode(rootNode);
-                    statusBar.setMessage("Loaded: " + selectedRoot);
-                    restoreOpenSession(selectedRoot);
+                    statusBar.setMessage("Loaded folders: " + joinDisplayPaths(selectedRoots));
+                    restoreOpenSession(selectedRoots);
                 } catch (Exception ex) {
                     treePanel.clear("Failed to load folder");
                     statusBar.showError(ex.getMessage());
                     showError("Failed to load folder.", ex);
+                } finally {
+                    endBlockingWork();
                 }
             }
         };
@@ -309,59 +428,124 @@ public class MainFrame extends JFrame {
     }
 
     private void loadLastRootFolder() {
-        String lastRootFolder = preferences.get(LAST_ROOT_FOLDER_KEY, null);
-        if (lastRootFolder == null || lastRootFolder.trim().length() == 0) {
+        String lastRootFolders = getPreferenceValue(LAST_ROOT_FOLDERS_KEY, null);
+        List<String> folderValues = splitLines(lastRootFolders);
+        if (folderValues.isEmpty()) {
+            String lastRootFolder = preferences.get(LAST_ROOT_FOLDER_KEY, null);
+            if (lastRootFolder != null && lastRootFolder.trim().length() > 0) {
+                folderValues.add(lastRootFolder.trim());
+            }
+        }
+        if (folderValues.isEmpty()) {
             return;
         }
-        Path lastRoot = Paths.get(lastRootFolder).toAbsolutePath().normalize();
-        if (Files.isDirectory(lastRoot)) {
-            loadRootFolder(lastRoot.toFile());
-        } else {
-            statusBar.setMessage("Last root folder was not found: " + lastRoot);
+        List<Path> existingRoots = new ArrayList<Path>();
+        List<Path> missingRoots = new ArrayList<Path>();
+        for (String folderValue : folderValues) {
+            Path lastRoot = Paths.get(folderValue).toAbsolutePath().normalize();
+            if (Files.isDirectory(lastRoot)) {
+                existingRoots.add(lastRoot);
+            } else {
+                missingRoots.add(lastRoot);
+            }
+        }
+        if (!existingRoots.isEmpty()) {
+            loadRootFolders(existingRoots);
+        } else if (!missingRoots.isEmpty()) {
+            statusBar.setMessage("Last root folders were not found: " + joinDisplayPaths(missingRoots));
         }
     }
 
-    private void saveLastRootFolder(Path selectedRoot) {
-        preferences.put(LAST_ROOT_FOLDER_KEY, selectedRoot.toAbsolutePath().normalize().toString());
+    private void saveLastRootFolders(List<Path> selectedRoots) {
+        putPreferenceValue(LAST_ROOT_FOLDERS_KEY, joinPaths(selectedRoots));
+        if (selectedRoots != null && !selectedRoots.isEmpty()) {
+            preferences.put(LAST_ROOT_FOLDER_KEY, selectedRoots.get(selectedRoots.size() - 1)
+                    .toAbsolutePath().normalize().toString());
+        }
     }
 
     private void saveOpenSession() {
-        if (rootDirectory == null) {
+        if (rootDirectories.isEmpty()) {
             return;
         }
-        preferences.put(SESSION_ROOT_FOLDER_KEY, rootDirectory.toAbsolutePath().normalize().toString());
+        putPreferenceValue(SESSION_ROOT_FOLDER_KEY, joinPaths(rootDirectories));
         boolean dataGroupingEnabled = csvStackPanel.isDataGroupingEnabled();
-        preferences.put(modeSessionKey(SESSION_OPEN_FILES_KEY, dataGroupingEnabled),
-                joinLines(csvStackPanel.getOpenRelativePaths()));
-        preferences.put(modeSessionKey(SESSION_COLLAPSED_GROUPS_KEY, dataGroupingEnabled),
+        putPreferenceValue(modeSessionKey(SESSION_OPEN_FILES_KEY, dataGroupingEnabled),
+                joinLines(getOpenSessionEntries()));
+        putPreferenceValue(modeSessionKey(SESSION_COLLAPSED_GROUPS_KEY, dataGroupingEnabled),
                 joinLines(new ArrayList<String>(csvStackPanel.getCollapsedGroupKeys())));
         preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, csvStackPanel.isDataGroupingEnabled());
     }
 
-    private void restoreOpenSession(final Path selectedRoot) {
-        String sessionRoot = preferences.get(SESSION_ROOT_FOLDER_KEY, null);
-        if (sessionRoot == null || !selectedRoot.toString().equals(Paths.get(sessionRoot).toAbsolutePath().normalize().toString())) {
+    private void unregisterRootFolder(DataNode node) {
+        if (node == null) {
+            return;
+        }
+        Path targetRoot = node.getPath().toAbsolutePath().normalize();
+        List<Path> remainingRoots = new ArrayList<Path>();
+        boolean removed = false;
+        for (Path rootDirectory : rootDirectories) {
+            Path normalizedRoot = rootDirectory.toAbsolutePath().normalize();
+            if (normalizedRoot.equals(targetRoot)) {
+                removed = true;
+            } else {
+                remainingRoots.add(normalizedRoot);
+            }
+        }
+        if (!removed) {
+            statusBar.setMessage("Only registered root folders can be removed from the list.");
+            return;
+        }
+        if (remainingRoots.isEmpty()) {
+            rootDirectories.clear();
+            clearSavedRootFolders();
+            treePanel.setRegisteredRootPaths(rootDirectories);
+            treePanel.clear("Select a root folder");
+            statusBar.setMessage("Removed root folder from the list: " + targetRoot);
+            saveOpenSession();
+            return;
+        }
+
+        loadRootFolders(remainingRoots);
+        statusBar.setMessage("Removing root folder from the list: " + targetRoot);
+    }
+
+    private void clearSavedRootFolders() {
+        putPreferenceValue(LAST_ROOT_FOLDERS_KEY, "");
+        preferences.remove(LAST_ROOT_FOLDER_KEY);
+        putPreferenceValue(SESSION_ROOT_FOLDER_KEY, "");
+    }
+
+    private void restoreOpenSession(final List<Path> selectedRoots) {
+        String sessionRoot = getPreferenceValue(SESSION_ROOT_FOLDER_KEY, null);
+        if (sessionRoot == null || !samePathList(selectedRoots, parseRootPaths(sessionRoot))) {
             return;
         }
         final boolean sessionDataGroupingEnabled = preferences.getBoolean(
                 SESSION_DATA_GROUPING_ENABLED_KEY,
                 preferences.getBoolean(DATA_GROUPING_ENABLED_KEY, true));
-        final List<String> relativePaths = splitLines(getModeSessionValue(
+        final List<String> sessionEntries = splitLines(getModeSessionValue(
                 SESSION_OPEN_FILES_KEY, sessionDataGroupingEnabled));
         final Set<String> collapsedGroups = new HashSet<String>(splitLines(getModeSessionValue(
                 SESSION_COLLAPSED_GROUPS_KEY, sessionDataGroupingEnabled)));
-        if (relativePaths.isEmpty() && collapsedGroups.isEmpty()) {
+        if (sessionEntries.isEmpty() && collapsedGroups.isEmpty()) {
             csvStackPanel.setDataGroupingEnabled(sessionDataGroupingEnabled);
             updateOpenGroupList();
             return;
         }
         statusBar.showLoading("Restoring previous open CSV files...");
-        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+        beginBlockingWork("前回開いていたCSVを復元しています...");
         SwingWorker<List<CsvDocument>, Void> worker = new SwingWorker<List<CsvDocument>, Void>() {
             @Override
             protected List<CsvDocument> doInBackground() {
                 List<CsvDocument> documents = new ArrayList<CsvDocument>();
-                for (String relativePath : relativePaths) {
+                for (String sessionEntry : sessionEntries) {
+                    SessionFileEntry entry = parseSessionFileEntry(sessionEntry);
+                    if (entry == null || entry.rootIndex < 0 || entry.rootIndex >= selectedRoots.size()) {
+                        continue;
+                    }
+                    Path selectedRoot = selectedRoots.get(entry.rootIndex);
+                    String relativePath = entry.relativePath;
                     Path csvPath = selectedRoot.resolve(relativePath).toAbsolutePath().normalize();
                     if (!csvPath.startsWith(selectedRoot)
                             || !Files.isRegularFile(csvPath)
@@ -379,7 +563,6 @@ public class MainFrame extends JFrame {
 
             @Override
             protected void done() {
-                setCursor(Cursor.getDefaultCursor());
                 restoringSession = true;
                 try {
                     csvStackPanel.setDataGroupingEnabled(sessionDataGroupingEnabled);
@@ -394,6 +577,7 @@ public class MainFrame extends JFrame {
                     statusBar.showError(ex.getMessage());
                 } finally {
                     restoringSession = false;
+                    endBlockingWork();
                 }
             }
         };
@@ -431,6 +615,163 @@ public class MainFrame extends JFrame {
         return lines;
     }
 
+    private List<String> getOpenSessionEntries() {
+        List<String> entries = new ArrayList<String>();
+        for (CsvEditorPanel panel : csvStackPanel.getOpenPanels()) {
+            Path filePath = panel.getDocument().getFilePath();
+            int rootIndex = findRootIndexForPath(filePath);
+            if (rootIndex < 0) {
+                continue;
+            }
+            entries.add(rootIndex + "\t" + panel.getDocument().getRelativePath().toString());
+        }
+        return entries;
+    }
+
+    private Path resolveRootForPath(Path filePath) {
+        int rootIndex = findRootIndexForPath(filePath);
+        if (rootIndex >= 0) {
+            return rootDirectories.get(rootIndex);
+        }
+        throw new IllegalStateException("CSV file is outside the selected root folders: " + filePath);
+    }
+
+    private int findRootIndexForPath(Path filePath) {
+        if (filePath == null) {
+            return -1;
+        }
+        Path normalizedFilePath = filePath.toAbsolutePath().normalize();
+        int bestIndex = -1;
+        int bestNameCount = -1;
+        for (int i = 0; i < rootDirectories.size(); i++) {
+            Path root = rootDirectories.get(i).toAbsolutePath().normalize();
+            if (normalizedFilePath.startsWith(root) && root.getNameCount() > bestNameCount) {
+                bestIndex = i;
+                bestNameCount = root.getNameCount();
+            }
+        }
+        return bestIndex;
+    }
+
+    private static SessionFileEntry parseSessionFileEntry(String value) {
+        if (value == null || value.trim().length() == 0) {
+            return null;
+        }
+        int separatorIndex = value.indexOf('\t');
+        if (separatorIndex < 0) {
+            return new SessionFileEntry(0, value.trim());
+        }
+        try {
+            int rootIndex = Integer.parseInt(value.substring(0, separatorIndex).trim());
+            String relativePath = value.substring(separatorIndex + 1).trim();
+            if (relativePath.length() == 0) {
+                return null;
+            }
+            return new SessionFileEntry(rootIndex, relativePath);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private static List<Path> normalizeSelectedRootFolders(JFileChooser chooser) {
+        List<Path> roots = new ArrayList<Path>();
+        File[] selectedFiles = chooser.getSelectedFiles();
+        if (selectedFiles == null || selectedFiles.length == 0) {
+            File selectedFile = chooser.getSelectedFile();
+            if (selectedFile != null) {
+                selectedFiles = new File[]{selectedFile};
+            }
+        }
+        if (selectedFiles == null) {
+            return roots;
+        }
+        for (File selectedFile : selectedFiles) {
+            if (selectedFile == null) {
+                continue;
+            }
+            Path root = selectedFile.toPath().toAbsolutePath().normalize();
+            if (!roots.contains(root)) {
+                roots.add(root);
+            }
+        }
+        return roots;
+    }
+
+    private static List<Path> mergeRootDirectories(List<Path> currentRoots, List<Path> selectedRoots) {
+        List<Path> mergedRoots = new ArrayList<Path>();
+        if (currentRoots != null) {
+            for (Path root : currentRoots) {
+                Path normalizedRoot = root.toAbsolutePath().normalize();
+                if (!mergedRoots.contains(normalizedRoot)) {
+                    mergedRoots.add(normalizedRoot);
+                }
+            }
+        }
+        if (selectedRoots != null) {
+            for (Path root : selectedRoots) {
+                Path normalizedRoot = root.toAbsolutePath().normalize();
+                if (!mergedRoots.contains(normalizedRoot)) {
+                    mergedRoots.add(normalizedRoot);
+                }
+            }
+        }
+        return mergedRoots;
+    }
+
+    private static String joinPaths(List<Path> paths) {
+        List<String> values = new ArrayList<String>();
+        if (paths != null) {
+            for (Path path : paths) {
+                if (path != null) {
+                    values.add(path.toAbsolutePath().normalize().toString());
+                }
+            }
+        }
+        return joinLines(values);
+    }
+
+    private static String joinDisplayPaths(List<Path> paths) {
+        if (paths == null || paths.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (Path path : paths) {
+            if (path == null) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append(", ");
+            }
+            builder.append(path.toAbsolutePath().normalize());
+        }
+        return builder.toString();
+    }
+
+    private static List<Path> parseRootPaths(String value) {
+        List<Path> roots = new ArrayList<Path>();
+        for (String line : splitLines(value)) {
+            Path root = Paths.get(line).toAbsolutePath().normalize();
+            if (!roots.contains(root)) {
+                roots.add(root);
+            }
+        }
+        return roots;
+    }
+
+    private static boolean samePathList(List<Path> left, List<Path> right) {
+        if (left == null || right == null || left.size() != right.size()) {
+            return false;
+        }
+        for (int i = 0; i < left.size(); i++) {
+            Path leftPath = left.get(i).toAbsolutePath().normalize();
+            Path rightPath = right.get(i).toAbsolutePath().normalize();
+            if (!leftPath.equals(rightPath)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void openCsv(final DataNode node) {
         final Path csvPath = node.getPath().toAbsolutePath().normalize();
         if (csvStackPanel.hasOpenDocument(csvPath)) {
@@ -440,16 +781,15 @@ public class MainFrame extends JFrame {
         }
 
         statusBar.showLoading("Opening CSV: " + node.getRelativePath());
-        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+        beginBlockingWork("CSVを開いています...");
         SwingWorker<CsvDocument, Void> worker = new SwingWorker<CsvDocument, Void>() {
             @Override
             protected CsvDocument doInBackground() throws Exception {
-                return documentService.open(rootDirectory, csvPath);
+                return documentService.open(resolveRootForPath(csvPath), csvPath);
             }
 
             @Override
             protected void done() {
-                setCursor(Cursor.getDefaultCursor());
                 try {
                     CsvDocument document = get();
                     csvStackPanel.addOrFocusDocument(document);
@@ -457,6 +797,8 @@ public class MainFrame extends JFrame {
                 } catch (Exception ex) {
                     statusBar.showError(ex.getMessage());
                     showError("Failed to open CSV.", ex);
+                } finally {
+                    endBlockingWork();
                 }
             }
         };
@@ -467,9 +809,64 @@ public class MainFrame extends JFrame {
         if (nodes == null || nodes.isEmpty()) {
             return;
         }
+        final List<DataNode> nodesToOpen = new ArrayList<DataNode>();
         for (DataNode node : nodes) {
-            openCsv(node);
+            if (node == null) {
+                continue;
+            }
+            Path csvPath = node.getPath().toAbsolutePath().normalize();
+            if (csvStackPanel.hasOpenDocument(csvPath)) {
+                csvStackPanel.focusDocument(csvPath);
+            } else {
+                nodesToOpen.add(node);
+            }
         }
+        if (nodesToOpen.isEmpty()) {
+            statusBar.setMessage("Selected CSV files are already open.");
+            return;
+        }
+
+        statusBar.showLoading("Opening CSV files: " + nodesToOpen.size());
+        beginBlockingWork("CSVを開いています... " + nodesToOpen.size() + "件");
+        SwingWorker<OpenCsvBatchResult, Void> worker = new SwingWorker<OpenCsvBatchResult, Void>() {
+            @Override
+            protected OpenCsvBatchResult doInBackground() {
+                OpenCsvBatchResult result = new OpenCsvBatchResult();
+                for (DataNode node : nodesToOpen) {
+                    Path csvPath = node.getPath().toAbsolutePath().normalize();
+                    try {
+                        result.documents.add(documentService.open(resolveRootForPath(csvPath), csvPath));
+                    } catch (Exception ex) {
+                        result.failedPaths.add(node.getRelativePath().toString());
+                    }
+                }
+                return result;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    OpenCsvBatchResult result = get();
+                    for (CsvDocument document : result.documents) {
+                        csvStackPanel.addOrFocusDocument(document);
+                    }
+                    if (result.failedPaths.isEmpty()) {
+                        statusBar.setMessage("Opened CSV files: " + result.documents.size());
+                    } else {
+                        statusBar.showError("Opened " + result.documents.size()
+                                + " CSV files. Failed: " + result.failedPaths.size());
+                        showError("Failed to open some CSV files.",
+                                new Exception(joinLines(result.failedPaths)));
+                    }
+                } catch (Exception ex) {
+                    statusBar.showError(ex.getMessage());
+                    showError("Failed to open CSV files.", ex);
+                } finally {
+                    endBlockingWork();
+                }
+            }
+        };
+        worker.execute();
     }
 
     private void updateOpenGroupList() {
@@ -494,19 +891,27 @@ public class MainFrame extends JFrame {
         SettingsDialog dialog = new SettingsDialog(this, csvStackPanel.isDataGroupingEnabled(),
                 preferences.get(ROW_CLIPBOARD_DELIMITER_TYPE_KEY,
                         SettingsDialog.ROW_CLIPBOARD_DELIMITER_TAB),
+                getAutoCollapseRowThreshold(),
+                getDataGroupPathSegmentLevel(),
                 new SettingsDialog.SettingsApplyListener() {
                     @Override
-                    public boolean settingsApplied(boolean dataGroupingEnabled, String rowClipboardDelimiterType) {
-                        return applySettings(dataGroupingEnabled, rowClipboardDelimiterType);
+                    public boolean settingsApplied(boolean dataGroupingEnabled, String rowClipboardDelimiterType,
+                            int autoCollapseRowThreshold, int dataGroupPathSegmentLevel) {
+                        return applySettings(dataGroupingEnabled, rowClipboardDelimiterType,
+                                autoCollapseRowThreshold, dataGroupPathSegmentLevel);
                     }
                 });
         dialog.setVisible(true);
     }
 
-    private boolean applySettings(boolean dataGroupingEnabled, String rowClipboardDelimiterType) {
+    private boolean applySettings(boolean dataGroupingEnabled, String rowClipboardDelimiterType,
+            int autoCollapseRowThreshold, int dataGroupPathSegmentLevel) {
         if (csvStackPanel.isDataGroupingEnabled() == dataGroupingEnabled) {
-            saveSettings(dataGroupingEnabled, rowClipboardDelimiterType);
+            saveSettings(dataGroupingEnabled, rowClipboardDelimiterType, autoCollapseRowThreshold,
+                    dataGroupPathSegmentLevel);
             csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter(rowClipboardDelimiterType));
+            csvStackPanel.setAutoCollapseRowThreshold(autoCollapseRowThreshold);
+            csvStackPanel.setDataGroupPathSegmentLevel(dataGroupPathSegmentLevel);
             saveOpenSession();
             return true;
         }
@@ -518,24 +923,30 @@ public class MainFrame extends JFrame {
             if (!csvStackPanel.requestCloseAll()) {
                 return false;
             }
-            saveSettings(dataGroupingEnabled, rowClipboardDelimiterType);
+            saveSettings(dataGroupingEnabled, rowClipboardDelimiterType, autoCollapseRowThreshold,
+                    dataGroupPathSegmentLevel);
             csvStackPanel.setDataGroupingEnabled(dataGroupingEnabled);
             csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter(rowClipboardDelimiterType));
+            csvStackPanel.setAutoCollapseRowThreshold(autoCollapseRowThreshold);
+            csvStackPanel.setDataGroupPathSegmentLevel(dataGroupPathSegmentLevel);
             updateOpenGroupList();
         } finally {
             suppressSessionSaving = previousSuppressSessionSaving;
         }
 
-        if (rootDirectory != null) {
-            restoreOpenSession(rootDirectory);
+        if (!rootDirectories.isEmpty()) {
+            restoreOpenSession(rootDirectories);
         }
         return true;
     }
 
-    private void saveSettings(boolean dataGroupingEnabled, String rowClipboardDelimiterType) {
+    private void saveSettings(boolean dataGroupingEnabled, String rowClipboardDelimiterType,
+            int autoCollapseRowThreshold, int dataGroupPathSegmentLevel) {
         preferences.putBoolean(DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
         preferences.putBoolean(SESSION_DATA_GROUPING_ENABLED_KEY, dataGroupingEnabled);
         preferences.put(ROW_CLIPBOARD_DELIMITER_TYPE_KEY, normalizeRowClipboardDelimiterType(rowClipboardDelimiterType));
+        preferences.putInt(AUTO_COLLAPSE_ROW_THRESHOLD_KEY, Math.max(0, autoCollapseRowThreshold));
+        preferences.putInt(DATA_GROUP_PATH_SEGMENT_LEVEL_KEY, Math.max(1, dataGroupPathSegmentLevel));
     }
 
     private String getRowClipboardDelimiter() {
@@ -557,8 +968,84 @@ public class MainFrame extends JFrame {
         return SettingsDialog.ROW_CLIPBOARD_DELIMITER_TAB;
     }
 
+    private int getAutoCollapseRowThreshold() {
+        return Math.max(0, preferences.getInt(AUTO_COLLAPSE_ROW_THRESHOLD_KEY, 0));
+    }
+
+    private int getDataGroupPathSegmentLevel() {
+        return Math.max(1, preferences.getInt(DATA_GROUP_PATH_SEGMENT_LEVEL_KEY, 2));
+    }
+
     private String getModeSessionValue(String baseKey, boolean dataGroupingEnabled) {
-        return preferences.get(modeSessionKey(baseKey, dataGroupingEnabled), "");
+        return getPreferenceValue(modeSessionKey(baseKey, dataGroupingEnabled), "");
+    }
+
+    private void putPreferenceValue(String key, String value) {
+        String normalizedValue = value == null ? "" : value;
+        int previousChunkCount = preferences.getInt(chunkCountKey(key), 0);
+        if (normalizedValue.length() <= PREFERENCE_VALUE_CHUNK_SIZE) {
+            preferences.put(key, normalizedValue);
+            preferences.remove(chunkCountKey(key));
+            removePreferenceChunks(key, previousChunkCount);
+            return;
+        }
+
+        preferences.remove(key);
+        List<String> chunks = splitPreferenceValue(normalizedValue);
+        preferences.putInt(chunkCountKey(key), chunks.size());
+        for (int i = 0; i < chunks.size(); i++) {
+            preferences.put(chunkKey(key, i), chunks.get(i));
+        }
+        removePreferenceChunks(key, previousChunkCount, chunks.size());
+    }
+
+    private String getPreferenceValue(String key, String defaultValue) {
+        int chunkCount = preferences.getInt(chunkCountKey(key), -1);
+        if (chunkCount <= 0) {
+            return preferences.get(key, defaultValue);
+        }
+
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < chunkCount; i++) {
+            String chunk = preferences.get(chunkKey(key, i), null);
+            if (chunk == null) {
+                return preferences.get(key, defaultValue);
+            }
+            builder.append(chunk);
+        }
+        return builder.toString();
+    }
+
+    static List<String> splitPreferenceValue(String value) {
+        List<String> chunks = new ArrayList<String>();
+        String normalizedValue = value == null ? "" : value;
+        if (normalizedValue.length() == 0) {
+            chunks.add("");
+            return chunks;
+        }
+        for (int start = 0; start < normalizedValue.length(); start += PREFERENCE_VALUE_CHUNK_SIZE) {
+            int end = Math.min(normalizedValue.length(), start + PREFERENCE_VALUE_CHUNK_SIZE);
+            chunks.add(normalizedValue.substring(start, end));
+        }
+        return chunks;
+    }
+
+    private void removePreferenceChunks(String key, int chunkCount) {
+        removePreferenceChunks(key, chunkCount, 0);
+    }
+
+    private void removePreferenceChunks(String key, int chunkCount, int startIndex) {
+        for (int i = Math.max(0, startIndex); i < chunkCount; i++) {
+            preferences.remove(chunkKey(key, i));
+        }
+    }
+
+    private static String chunkCountKey(String key) {
+        return key + PREFERENCE_CHUNK_COUNT_SUFFIX;
+    }
+
+    private static String chunkKey(String key, int index) {
+        return key + "." + index;
     }
 
     private static String modeSessionKey(String baseKey, boolean dataGroupingEnabled) {
@@ -644,5 +1131,20 @@ public class MainFrame extends JFrame {
             }
         }
         return icons;
+    }
+
+    private static final class SessionFileEntry {
+        private final int rootIndex;
+        private final String relativePath;
+
+        private SessionFileEntry(int rootIndex, String relativePath) {
+            this.rootIndex = rootIndex;
+            this.relativePath = relativePath;
+        }
+    }
+
+    private static final class OpenCsvBatchResult {
+        private final List<CsvDocument> documents = new ArrayList<CsvDocument>();
+        private final List<String> failedPaths = new ArrayList<String>();
     }
 }

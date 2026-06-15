@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -104,6 +105,25 @@ public class CsvDataScanServiceTest {
         assertTrue(rootNode.getUserObject() instanceof DataNode);
         assertTrue(dataNode.getUserObject() instanceof DataNode);
         assertFalse(((DataNode) dataNode.getUserObject()).getChildren().isEmpty());
+    }
+
+    @Test
+    public void combinesMultipleRootFoldersUnderSyntheticRoot() throws Exception {
+        File firstRoot = temporaryFolder.newFolder("Data01");
+        File secondRoot = temporaryFolder.newFolder("Data02");
+        write(firstRoot.toPath().resolve("Data01_01").resolve("input").resolve("user.csv"));
+        write(secondRoot.toPath().resolve("Data02_01").resolve("input").resolve("user.csv"));
+
+        DataNode node = service.scan(Arrays.asList(firstRoot.toPath(), secondRoot.toPath()));
+
+        assertEquals("選択ルート", node.getDisplayName());
+        assertEquals(2, node.getChildren().size());
+        assertEquals("Data01", node.getChildren().get(0).getDisplayName());
+        assertEquals("Data02", node.getChildren().get(1).getDisplayName());
+        assertEquals(firstRoot.toPath().toAbsolutePath().normalize(),
+                findCsv(node, "Data01_01/input/user.csv").getPath().getParent().getParent().getParent());
+        assertEquals("Data02_01" + File.separator + "input" + File.separator + "user.csv",
+                findCsv(node.getChildren().get(1), "Data02_01/input/user.csv").getRelativePath().toString());
     }
 
     private DataNode findCsv(DataNode root, String relativePath) {

@@ -1,0 +1,3 @@
+id,depth,expected_group,note
+1,one-level,folderA,Only one directory exists under the selected root
+2,one-level,folderA,pathSegmentIndex falls back to firstDirectory

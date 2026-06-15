@@ -18,6 +18,19 @@ public class DataGroupKeyResolverTest {
     }
 
     @Test
+    public void pathSegmentLevelConfigUsesOneBasedLevelFromRoot() {
+        DataGroupKeyResolver firstLevelResolver = new DataGroupKeyResolver(
+                DataGroupingConfig.pathSegmentLevelConfig(1));
+        DataGroupKeyResolver secondLevelResolver = new DataGroupKeyResolver(
+                DataGroupingConfig.pathSegmentLevelConfig(2));
+
+        assertEquals("Data01", firstLevelResolver.resolve(
+                Paths.get("Data01", "Data01_01", "sample002", "endpoints.csv")));
+        assertEquals("Data01_01", secondLevelResolver.resolve(
+                Paths.get("Data01", "Data01_01", "sample002", "endpoints.csv")));
+    }
+
+    @Test
     public void pathSegmentPatternUsesConfiguredRegex() {
         DataGroupingConfig config = DataGroupingConfig.defaultConfig();
         config.setActivePattern("pathSegmentPattern");

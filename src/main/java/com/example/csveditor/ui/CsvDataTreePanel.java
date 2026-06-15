@@ -3,29 +3,46 @@ package com.example.csveditor.ui;
 import com.example.csveditor.domain.DataNode;
 
 import javax.swing.BorderFactory;
+import javax.swing.Icon;
 import javax.swing.JMenuItem;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
+import javax.swing.JSeparator;
 import javax.swing.JTree;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
+import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Polygon;
+import java.awt.RenderingHints;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Left-side tree panel for CSV files under the selected root folder.
  */
 public class CsvDataTreePanel extends JPanel {
+    private static final String SYNTHETIC_MULTI_ROOT_NAME = "選択ルート";
+    private static final Color ROOT_FOLDER_ICON_COLOR = new Color(36, 143, 154);
+    private static final Color ROOT_FOLDER_ICON_BORDER_COLOR = new Color(20, 95, 105);
 
     public interface CsvOpenListener {
         void csvOpenRequested(DataNode node);
@@ -33,11 +50,21 @@ public class CsvDataTreePanel extends JPanel {
         void csvOpenRequested(List<DataNode> nodes);
     }
 
+    public interface RootFolderRegistrationListener {
+        void rootFolderUnregisterRequested(DataNode node);
+    }
+
     private final JTree tree;
     private final JPopupMenu folderPopupMenu;
+    private final JPopupMenu csvFilePopupMenu;
     private final JMenuItem expandTreeItem;
     private final JMenuItem openDescendantCsvItem;
+    private final JMenuItem copyCsvFileNameItem;
+    private final JMenuItem unregisterRootFolderItem;
+    private final JSeparator unregisterRootFolderSeparator;
+    private final Set<Path> registeredRootPaths;
     private CsvOpenListener csvOpenListener;
+    private RootFolderRegistrationListener rootFolderRegistrationListener;
 
     public CsvDataTreePanel() {
         super(new BorderLayout());
@@ -47,9 +74,12 @@ public class CsvDataTreePanel extends JPanel {
         DefaultMutableTreeNode placeholder = new DefaultMutableTreeNode("Select a root folder");
         this.tree = new JTree(new DefaultTreeModel(placeholder));
         this.tree.setRootVisible(true);
-        this.tree.setShowsRootHandles(true);
+        this.tree.setShowsRootHandles(false);
+        this.tree.setCellRenderer(new RootAwareTreeCellRenderer());
+        this.registeredRootPaths = new HashSet<Path>();
 
         this.folderPopupMenu = new JPopupMenu();
+        this.csvFilePopupMenu = new JPopupMenu();
         this.expandTreeItem = new JMenuItem("ツリーを展開");
         this.expandTreeItem.addActionListener(new javax.swing.AbstractAction() {
             @Override
@@ -64,9 +94,27 @@ public class CsvDataTreePanel extends JPanel {
                 openDescendantCsvFiles();
             }
         });
+        this.copyCsvFileNameItem = new JMenuItem("ファイル名をコピー");
+        this.copyCsvFileNameItem.addActionListener(new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent event) {
+                copySelectedCsvFileName();
+            }
+        });
+        this.unregisterRootFolderItem = new JMenuItem("ルートフォルダーの登録を解除");
+        this.unregisterRootFolderSeparator = new JSeparator();
+        this.unregisterRootFolderItem.addActionListener(new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent event) {
+                unregisterSelectedRootFolder();
+            }
+        });
         this.folderPopupMenu.add(expandTreeItem);
         this.folderPopupMenu.addSeparator();
         this.folderPopupMenu.add(openDescendantCsvItem);
+        this.folderPopupMenu.add(unregisterRootFolderSeparator);
+        this.folderPopupMenu.add(unregisterRootFolderItem);
+        this.csvFilePopupMenu.add(copyCsvFileNameItem);
 
         installOpenHandlers();
         add(new JScrollPane(tree), BorderLayout.CENTER);
@@ -76,13 +124,31 @@ public class CsvDataTreePanel extends JPanel {
         this.csvOpenListener = csvOpenListener;
     }
 
+    public void setRootFolderRegistrationListener(RootFolderRegistrationListener rootFolderRegistrationListener) {
+        this.rootFolderRegistrationListener = rootFolderRegistrationListener;
+    }
+
+    public void setRegisteredRootPaths(List<Path> rootPaths) {
+        registeredRootPaths.clear();
+        if (rootPaths == null) {
+            return;
+        }
+        for (Path rootPath : rootPaths) {
+            if (rootPath != null) {
+                registeredRootPaths.add(rootPath.toAbsolutePath().normalize());
+            }
+        }
+    }
+
     public void setRootNode(final DataNode rootNode) {
         runOnEdt(new Runnable() {
             @Override
             public void run() {
                 DefaultMutableTreeNode swingRoot = toSwingNode(rootNode);
+                boolean syntheticMultiRootNode = isSyntheticMultiRootNode(rootNode);
                 tree.setModel(new DefaultTreeModel(swingRoot));
-                tree.setRootVisible(true);
+                tree.setRootVisible(!syntheticMultiRootNode);
+                tree.setShowsRootHandles(false);
                 tree.expandPath(new TreePath(swingRoot.getPath()));
             }
         });
@@ -139,11 +205,18 @@ public class CsvDataTreePanel extends JPanel {
 
         tree.setSelectionPath(path);
         DataNode node = getDataNode(path);
-        if (node == null || node.isCsvFile()) {
+        if (node == null) {
+            return;
+        }
+        if (node.isCsvFile()) {
+            csvFilePopupMenu.show(tree, event.getX(), event.getY());
             return;
         }
 
         openDescendantCsvItem.setEnabled(!collectCsvNodes(node).isEmpty());
+        boolean registeredRootSelection = isRegisteredRootSelection(path, node);
+        unregisterRootFolderSeparator.setVisible(registeredRootSelection);
+        unregisterRootFolderItem.setVisible(registeredRootSelection);
         folderPopupMenu.show(tree, event.getX(), event.getY());
     }
 
@@ -192,6 +265,65 @@ public class CsvDataTreePanel extends JPanel {
 
         expandDescendants(selectionPath);
         csvOpenListener.csvOpenRequested(csvNodes);
+    }
+
+    private void copySelectedCsvFileName() {
+        TreePath selectionPath = tree.getSelectionPath();
+        if (selectionPath == null) {
+            return;
+        }
+
+        DataNode node = getDataNode(selectionPath);
+        if (node == null || !node.isCsvFile()) {
+            return;
+        }
+
+        Path fileName = node.getPath().getFileName();
+        String text = fileName == null ? node.getPath().toString() : fileName.toString();
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+    }
+
+    private void unregisterSelectedRootFolder() {
+        TreePath selectionPath = tree.getSelectionPath();
+        if (selectionPath == null || rootFolderRegistrationListener == null) {
+            return;
+        }
+
+        DataNode node = getDataNode(selectionPath);
+        if (node == null || !isRegisteredRootSelection(selectionPath, node)) {
+            return;
+        }
+
+        rootFolderRegistrationListener.rootFolderUnregisterRequested(node);
+    }
+
+    private boolean isRegisteredRootSelection(TreePath path, DataNode node) {
+        if (path == null || node == null || !node.isDirectory()) {
+            return false;
+        }
+        Path nodePath = node.getPath().toAbsolutePath().normalize();
+        if (!registeredRootPaths.contains(nodePath)) {
+            return false;
+        }
+        int pathCount = path.getPathCount();
+        if (registeredRootPaths.size() <= 1) {
+            return pathCount == 1;
+        }
+        return pathCount == 2;
+    }
+
+    private boolean isRegisteredRootTreePath(TreePath path) {
+        if (path == null) {
+            return false;
+        }
+        DataNode node = getDataNode(path);
+        return isRegisteredRootSelection(path, node);
+    }
+
+    private boolean isSyntheticMultiRootNode(DataNode node) {
+        return node != null
+                && registeredRootPaths.size() > 1
+                && SYNTHETIC_MULTI_ROOT_NAME.equals(node.getDisplayName());
     }
 
     private DataNode getDataNode(TreePath path) {
@@ -246,6 +378,59 @@ public class CsvDataTreePanel extends JPanel {
             runnable.run();
         } else {
             SwingUtilities.invokeLater(runnable);
+        }
+    }
+
+    private final class RootAwareTreeCellRenderer extends DefaultTreeCellRenderer {
+        private final Icon rootFolderIcon = new RootFolderIcon();
+
+        @Override
+        public Component getTreeCellRendererComponent(JTree tree, Object value, boolean selected,
+                boolean expanded, boolean leaf, int row, boolean hasFocus) {
+            Component component = super.getTreeCellRendererComponent(
+                    tree, value, selected, expanded, leaf, row, hasFocus);
+            TreePath path = tree.getPathForRow(row);
+            if (isRegisteredRootTreePath(path)) {
+                setIcon(rootFolderIcon);
+            }
+            return component;
+        }
+    }
+
+    private static final class RootFolderIcon implements Icon {
+        private static final int WIDTH = 16;
+        private static final int HEIGHT = 16;
+
+        @Override
+        public int getIconWidth() {
+            return WIDTH;
+        }
+
+        @Override
+        public int getIconHeight() {
+            return HEIGHT;
+        }
+
+        @Override
+        public void paintIcon(Component component, Graphics graphics, int x, int y) {
+            Graphics2D g = (Graphics2D) graphics.create();
+            try {
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                Polygon tab = new Polygon();
+                tab.addPoint(x + 1, y + 5);
+                tab.addPoint(x + 5, y + 5);
+                tab.addPoint(x + 7, y + 7);
+                tab.addPoint(x + 15, y + 7);
+                tab.addPoint(x + 15, y + 13);
+                tab.addPoint(x + 1, y + 13);
+                g.setColor(ROOT_FOLDER_ICON_COLOR);
+                g.fillPolygon(tab);
+                g.setColor(ROOT_FOLDER_ICON_BORDER_COLOR);
+                g.drawPolygon(tab);
+                g.drawLine(x + 2, y + 8, x + 14, y + 8);
+            } finally {
+                g.dispose();
+            }
         }
     }
 }

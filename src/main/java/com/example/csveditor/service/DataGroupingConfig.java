@@ -24,6 +24,14 @@ public class DataGroupingConfig {
     }
 
     public static DataGroupingConfig defaultConfig() {
+        return pathSegmentIndexConfig(1);
+    }
+
+    public static DataGroupingConfig pathSegmentLevelConfig(int oneBasedLevel) {
+        return pathSegmentIndexConfig(Math.max(1, oneBasedLevel) - 1);
+    }
+
+    private static DataGroupingConfig pathSegmentIndexConfig(int zeroBasedIndex) {
         DataGroupingConfig config = new DataGroupingConfig();
         config.activePattern = "pathSegmentIndex";
         config.patterns = new Patterns();
@@ -32,7 +40,7 @@ public class DataGroupingConfig {
         config.patterns.pathSegmentPattern.searchTarget = "directoriesOnly";
         config.patterns.pathSegmentPattern.fallback = "firstDirectory";
         config.patterns.pathSegmentIndex = new PathSegmentIndex();
-        config.patterns.pathSegmentIndex.index = 1;
+        config.patterns.pathSegmentIndex.index = Math.max(0, zeroBasedIndex);
         config.patterns.pathSegmentIndex.fallback = "firstDirectory";
         config.patterns.parentDirectory = new ParentDirectory();
         config.patterns.parentDirectory.levelsUpFromFile = 2;

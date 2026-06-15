@@ -3,12 +3,13 @@ package com.example.csveditor.ui;
 import com.example.csveditor.domain.CsvDocument;
 import com.example.csveditor.service.CsvDocumentService;
 import com.example.csveditor.service.DataGroupKeyResolver;
-import com.example.csveditor.service.DataGroupingConfigLoader;
+import com.example.csveditor.service.DataGroupingConfig;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.Scrollable;
@@ -54,7 +55,7 @@ public class CsvStackPanel extends JScrollPane {
     private final Map<String, JPanel> groupSectionsByKey;
     private final Set<String> collapsedGroupKeys;
     private final CsvDocumentService documentService;
-    private final DataGroupKeyResolver groupKeyResolver;
+    private DataGroupKeyResolver groupKeyResolver;
     private SessionChangeListener sessionChangeListener;
     private ActiveGroupChangeListener activeGroupChangeListener;
     private boolean dataGroupingEnabled = true;
@@ -62,15 +63,17 @@ public class CsvStackPanel extends JScrollPane {
     private boolean suppressVisibleGroupTracking;
     private String rowClipboardDelimiter = "\t";
     private String activeGroupKey;
+    private int autoCollapseRowThreshold;
+    private int dataGroupPathSegmentLevel = 2;
 
     public CsvStackPanel(CsvDocumentService documentService) {
-        this(documentService, new DataGroupKeyResolver(DataGroupingConfigLoader.loadDefault()));
+        this(documentService, null);
     }
 
     public CsvStackPanel(CsvDocumentService documentService, DataGroupKeyResolver groupKeyResolver) {
         this.documentService = documentService;
         this.groupKeyResolver = groupKeyResolver == null
-                ? new DataGroupKeyResolver(DataGroupingConfigLoader.loadDefault())
+                ? createGroupKeyResolver(dataGroupPathSegmentLevel)
                 : groupKeyResolver;
         this.contentPanel = new ScrollableContentPanel();
         this.contentPanel.setLayout(new BoxLayout(contentPanel, BoxLayout.Y_AXIS));
@@ -107,6 +110,9 @@ public class CsvStackPanel extends JScrollPane {
                 }
 
                 final CsvEditorPanel panel = new CsvEditorPanel(document, documentService);
+                if (shouldAutoCollapse(document)) {
+                    panel.setCollapsed(true);
+                }
                 panel.setRowClipboardDelimiter(rowClipboardDelimiter);
                 panel.setAlignmentX(Component.LEFT_ALIGNMENT);
                 panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, panel.getPreferredSize().height));
@@ -198,6 +204,23 @@ public class CsvStackPanel extends JScrollPane {
         for (CsvEditorPanel panel : panelsByPath.values()) {
             panel.setRowClipboardDelimiter(this.rowClipboardDelimiter);
         }
+    }
+
+    public void setAutoCollapseRowThreshold(int autoCollapseRowThreshold) {
+        this.autoCollapseRowThreshold = Math.max(0, autoCollapseRowThreshold);
+    }
+
+    public void setDataGroupPathSegmentLevel(int dataGroupPathSegmentLevel) {
+        int normalizedLevel = Math.max(1, dataGroupPathSegmentLevel);
+        if (this.dataGroupPathSegmentLevel == normalizedLevel) {
+            return;
+        }
+        this.dataGroupPathSegmentLevel = normalizedLevel;
+        this.groupKeyResolver = createGroupKeyResolver(normalizedLevel);
+        collapsedGroupKeys.clear();
+        setActiveGroupKey(findFirstOpenGroupKey());
+        rebuildContentPanel();
+        notifySessionChanged();
     }
 
     public List<String> getOpenGroupKeys() {
@@ -526,6 +549,7 @@ public class CsvStackPanel extends JScrollPane {
     private JPanel createGroupHeaderPanel(final String groupKey, boolean active) {
         JPanel headerPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         headerPanel.setBackground(getPanelBackground());
+        JLabel groupNameLabel = createGroupHeaderLabel(groupKey, active);
         final JButton collapseButton = createGroupHeaderButton(
                 collapsedGroupKeys.contains(groupKey) ? "▸" : "▾");
         collapseButton.setToolTipText("このデータグループを折りたたみ/展開します。");
@@ -543,9 +567,26 @@ public class CsvStackPanel extends JScrollPane {
         closeGroupButton.setToolTipText("このデータグループ内のCSVをすべて閉じます。");
         closeGroupButton.addActionListener(e -> closeGroup(groupKey));
 
+        headerPanel.add(groupNameLabel);
         headerPanel.add(collapseButton);
         headerPanel.add(closeGroupButton);
         return headerPanel;
+    }
+
+    private JLabel createGroupHeaderLabel(String groupKey, boolean active) {
+        final int maxLabelWidth = 180;
+        JLabel label = new JLabel(groupKey == null ? "" : groupKey);
+        label.setToolTipText(groupKey);
+        label.setHorizontalAlignment(JLabel.LEFT);
+        label.setFont(label.getFont().deriveFont(active ? Font.BOLD : Font.PLAIN, 12f));
+        label.setForeground(active ? DISPLAYED_GROUP_ACCENT : UIManager.getColor("Label.foreground"));
+        Dimension preferredSize = label.getPreferredSize();
+        int labelWidth = Math.min(maxLabelWidth, preferredSize.width);
+        Dimension labelSize = new Dimension(labelWidth, 24);
+        label.setMinimumSize(new Dimension(0, 24));
+        label.setPreferredSize(labelSize);
+        label.setMaximumSize(labelSize);
+        return label;
     }
 
     private JButton createGroupHeaderButton(String text) {
@@ -563,6 +604,17 @@ public class CsvStackPanel extends JScrollPane {
 
     private String getGroupKey(CsvEditorPanel panel) {
         return groupKeyResolver.resolve(panel.getDocument().getRelativePath());
+    }
+
+    private boolean shouldAutoCollapse(CsvDocument document) {
+        return autoCollapseRowThreshold > 0
+                && document != null
+                && document.getRowCount() >= autoCollapseRowThreshold;
+    }
+
+    private static DataGroupKeyResolver createGroupKeyResolver(int dataGroupPathSegmentLevel) {
+        return new DataGroupKeyResolver(
+                DataGroupingConfig.pathSegmentLevelConfig(Math.max(1, dataGroupPathSegmentLevel)));
     }
 
     private void setActiveGroupKey(String groupKey) {

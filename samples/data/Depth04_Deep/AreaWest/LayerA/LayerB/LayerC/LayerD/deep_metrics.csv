@@ -1,0 +1,3 @@
+id,depth,expected_group,note
+1,deep,LayerA,Second directory from root is used as group
+2,deep,LayerA,Same file name in a different deep branch

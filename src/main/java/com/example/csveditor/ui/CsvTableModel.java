@@ -15,6 +15,7 @@ public final class CsvTableModel extends AbstractTableModel {
 
     private final CsvDocument document;
     private ChangeListener changeListener;
+    private boolean transposed;
 
     public CsvTableModel(CsvDocument document) {
         if (document == null) {
@@ -31,18 +32,33 @@ public final class CsvTableModel extends AbstractTableModel {
         this.changeListener = changeListener;
     }
 
+    public boolean isTransposed() {
+        return transposed;
+    }
+
+    public void setTransposed(boolean transposed) {
+        if (this.transposed == transposed) {
+            return;
+        }
+        this.transposed = transposed;
+        fireTableStructureChanged();
+    }
+
     @Override
     public int getRowCount() {
-        return document.getRowCount();
+        return transposed ? document.getColumnCount() : document.getRowCount();
     }
 
     @Override
     public int getColumnCount() {
-        return document.getColumnCount();
+        return transposed ? document.getRowCount() + 1 : document.getColumnCount();
     }
 
     @Override
     public String getColumnName(int column) {
+        if (transposed) {
+            return column == 0 ? "項目" : "#" + column;
+        }
         return document.getSchema().getDisplayHeader(column);
     }
 
@@ -53,16 +69,35 @@ public final class CsvTableModel extends AbstractTableModel {
 
     @Override
     public boolean isCellEditable(int rowIndex, int columnIndex) {
-        return true;
+        return !transposed || columnIndex > 0;
     }
 
     @Override
     public Object getValueAt(int rowIndex, int columnIndex) {
+        if (transposed) {
+            if (columnIndex == 0) {
+                return document.getSchema().getDisplayHeader(rowIndex);
+            }
+            return document.getValueAt(columnIndex - 1, rowIndex);
+        }
         return document.getValueAt(rowIndex, columnIndex);
     }
 
     @Override
     public void setValueAt(Object value, int rowIndex, int columnIndex) {
+        if (transposed) {
+            if (columnIndex <= 0) {
+                return;
+            }
+            setDocumentValue(value, columnIndex - 1, rowIndex);
+            fireTableCellUpdated(rowIndex, columnIndex);
+            return;
+        }
+        setDocumentValue(value, rowIndex, columnIndex);
+        fireTableCellUpdated(rowIndex, columnIndex);
+    }
+
+    private void setDocumentValue(Object value, int rowIndex, int columnIndex) {
         String newValue = value == null ? "" : String.valueOf(value);
         String oldValue = document.getValueAt(rowIndex, columnIndex);
         if (newValue.equals(oldValue)) {
@@ -70,10 +105,12 @@ public final class CsvTableModel extends AbstractTableModel {
         }
         notifyBeforeDocumentChange();
         document.setValueAt(rowIndex, columnIndex, newValue);
-        fireTableCellUpdated(rowIndex, columnIndex);
     }
 
     public void removeRows(int[] rowIndexes) {
+        if (transposed) {
+            return;
+        }
         if (rowIndexes == null || rowIndexes.length == 0) {
             return;
         }
@@ -86,18 +123,27 @@ public final class CsvTableModel extends AbstractTableModel {
     }
 
     public void insertBlankRow(int rowIndex) {
+        if (transposed) {
+            return;
+        }
         notifyBeforeDocumentChange();
         document.insertBlankRow(rowIndex);
         fireTableRowsInserted(rowIndex, rowIndex);
     }
 
     public void insertRow(int rowIndex, List<String> values) {
+        if (transposed) {
+            return;
+        }
         notifyBeforeDocumentChange();
         document.insertRow(rowIndex, values);
         fireTableRowsInserted(rowIndex, rowIndex);
     }
 
     public void insertRows(int rowIndex, List<List<String>> rows) {
+        if (transposed) {
+            return;
+        }
         if (rows == null || rows.isEmpty()) {
             return;
         }
@@ -109,12 +155,18 @@ public final class CsvTableModel extends AbstractTableModel {
     }
 
     public void replaceRow(int rowIndex, List<String> values) {
+        if (transposed) {
+            return;
+        }
         notifyBeforeDocumentChange();
         document.replaceRow(rowIndex, values);
         fireTableRowsUpdated(rowIndex, rowIndex);
     }
 
     public int replaceRows(int rowIndex, List<List<String>> rows) {
+        if (transposed) {
+            return 0;
+        }
         if (rows == null || rows.isEmpty() || rowIndex < 0 || rowIndex >= document.getRowCount()) {
             return 0;
         }
@@ -128,6 +180,14 @@ public final class CsvTableModel extends AbstractTableModel {
     }
 
     public List<String> copyRow(int rowIndex) {
+        if (transposed) {
+            java.util.ArrayList<String> row = new java.util.ArrayList<String>();
+            for (int column = 0; column < getColumnCount(); column++) {
+                Object value = getValueAt(rowIndex, column);
+                row.add(value == null ? "" : String.valueOf(value));
+            }
+            return row;
+        }
         return document.copyRow(rowIndex);
     }
 

@@ -1,0 +1,3 @@
+id,depth,expected_group,note
+1,root,–¢•ª—Þ,CSV is directly under the selected root folder
+2,root,–¢•ª—Þ,No directory segment exists before the file name
