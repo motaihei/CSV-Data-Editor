@@ -394,6 +394,28 @@ public class CsvStackPanel extends JScrollPane {
         notifySessionChanged();
     }
 
+    public boolean requestClosePanelsUnderRoots(Set<Path> rootPaths) {
+        List<CsvEditorPanel> targetPanels = findPanelsUnderRoots(rootPaths);
+        if (targetPanels.isEmpty()) {
+            return true;
+        }
+        for (CsvEditorPanel panel : targetPanels) {
+            if (!panel.confirmForApplicationExit(this)) {
+                return false;
+            }
+        }
+        for (CsvEditorPanel panel : targetPanels) {
+            panelsByPath.remove(normalize(panel.getDocument().getFilePath()));
+        }
+        collapsedGroupKeys.retainAll(new HashSet<String>(getOpenGroupKeys()));
+        if (activeGroupKey != null && !hasGroupKey(activeGroupKey)) {
+            setActiveGroupKey(findFirstOpenGroupKey());
+        }
+        rebuildContentPanel();
+        notifySessionChanged();
+        return true;
+    }
+
     public void requestCloseGroup(String groupKey) {
         if (dataGroupingEnabled) {
             closeGroup(groupKey);
@@ -559,6 +581,29 @@ public class CsvStackPanel extends JScrollPane {
         } finally {
             rebuildingContentPanel = false;
         }
+    }
+
+    private List<CsvEditorPanel> findPanelsUnderRoots(Set<Path> rootPaths) {
+        List<CsvEditorPanel> targetPanels = new ArrayList<CsvEditorPanel>();
+        if (rootPaths == null || rootPaths.isEmpty()) {
+            return targetPanels;
+        }
+        Set<Path> normalizedRoots = new HashSet<Path>();
+        for (Path rootPath : rootPaths) {
+            if (rootPath != null) {
+                normalizedRoots.add(rootPath.toAbsolutePath().normalize());
+            }
+        }
+        for (CsvEditorPanel panel : panelsByPath.values()) {
+            Path filePath = panel.getDocument().getFilePath().toAbsolutePath().normalize();
+            for (Path rootPath : normalizedRoots) {
+                if (filePath.startsWith(rootPath)) {
+                    targetPanels.add(panel);
+                    break;
+                }
+            }
+        }
+        return targetPanels;
     }
 
     private List<CsvEditorPanel> filterPanelsByFileName(List<CsvEditorPanel> panels) {

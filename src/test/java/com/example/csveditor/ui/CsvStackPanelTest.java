@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -76,6 +77,27 @@ public class CsvStackPanelTest {
                 getDisplayedFileNames(stackPanel));
     }
 
+    @Test
+    public void closesOnlyPanelsUnderUnregisteredRoot() throws Exception {
+        final CsvStackPanel stackPanel = createStackPanel(true);
+        final Path firstRoot = Paths.get("C:\\data\\RootA");
+        final Path secondRoot = Paths.get("C:\\data\\RootB");
+        runOnEdt(new Runnable() {
+            @Override
+            public void run() {
+                stackPanel.addOrFocusDocuments(Arrays.asList(
+                        document(firstRoot, "GroupA", "first.csv"),
+                        document(secondRoot, "GroupB", "second.csv"),
+                        document(firstRoot, "GroupC", "third.csv")));
+                stackPanel.requestClosePanelsUnderRoots(Collections.singleton(firstRoot));
+            }
+        });
+
+        assertEquals(Arrays.asList("second.csv"), getDisplayedFileNames(stackPanel));
+        assertEquals(Arrays.asList("GroupB\\second.csv"), stackPanel.getOpenRelativePaths());
+        assertEquals(Arrays.asList("GroupB"), stackPanel.getOpenGroupKeys());
+    }
+
     private static CsvStackPanel createStackPanel(boolean dataGroupingEnabled) {
         CsvStackPanel stackPanel = new CsvStackPanel(new CsvDocumentService(),
                 new DataGroupKeyResolver(DataGroupingConfig.pathSegmentLevelConfig(1)));
@@ -86,6 +108,11 @@ public class CsvStackPanelTest {
     private static CsvDocument document(String groupName, String fileName) {
         Path relativePath = Paths.get(groupName, fileName);
         return new CsvDocument(Paths.get("C:\\data").resolve(relativePath), relativePath);
+    }
+
+    private static CsvDocument document(Path rootPath, String groupName, String fileName) {
+        Path relativePath = Paths.get(groupName, fileName);
+        return new CsvDocument(rootPath.resolve(relativePath), relativePath);
     }
 
     private static List<String> getDisplayedFileNames(CsvStackPanel stackPanel) throws Exception {

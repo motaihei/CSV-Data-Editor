@@ -41,6 +41,8 @@ import java.awt.GridBagLayout;
 import java.awt.Image;
 import java.awt.Insets;
 import java.awt.Toolkit;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
@@ -82,6 +84,8 @@ public class MainFrame extends JFrame {
     private boolean restoringSession;
     private boolean suppressSessionSaving;
     private boolean updatingCsvSearchSuggestions;
+    private static final int CSV_SEARCH_FIELD_MIN_WIDTH = 140;
+    private static final int CSV_SEARCH_FIELD_PREFERRED_WIDTH = 360;
     private static final String LAST_ROOT_FOLDER_KEY = "lastRootFolder";
     private static final String LAST_ROOT_FOLDERS_KEY = "lastRootFolders";
     private static final String SESSION_ROOT_FOLDER_KEY = "sessionRootFolder";
@@ -304,10 +308,10 @@ public class MainFrame extends JFrame {
         searchBar.setLayout(new GridBagLayout());
         csvSearchComboBox = new JComboBox<String>(new DefaultComboBoxModel<String>());
         csvSearchComboBox.setEditable(true);
-        Dimension csvSearchFieldSize = new Dimension(360, 24);
+        Dimension csvSearchFieldSize = new Dimension(CSV_SEARCH_FIELD_PREFERRED_WIDTH, 24);
         csvSearchComboBox.setPreferredSize(csvSearchFieldSize);
-        csvSearchComboBox.setMinimumSize(csvSearchFieldSize);
-        csvSearchComboBox.setMaximumSize(csvSearchFieldSize);
+        csvSearchComboBox.setMinimumSize(new Dimension(CSV_SEARCH_FIELD_MIN_WIDTH, 24));
+        csvSearchComboBox.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
         csvSearchComboBox.setToolTipText("開いているCSVパネルをCSVファイル名で絞り込みます。");
         JButton clearCsvSearchButton = new JButton("クリア");
         clearCsvSearchButton.setEnabled(false);
@@ -344,24 +348,39 @@ public class MainFrame extends JFrame {
             updateCsvPanelSearchFilter();
             clearCsvSearchButton.setEnabled(!getCsvSearchText().isEmpty());
         });
+        JPanel searchGroup = createSearchToolBarGroup(new JLabel("検索"), csvSearchComboBox, clearCsvSearchButton);
+        JPanel panelCollapseGroup = createPanelCollapseToolBarGroup();
+        JPanel groupCollapseGroup = createGroupCollapseToolBarGroup();
+        JPanel columnWidthGroup = createColumnWidthToolBarGroup();
+        JPanel closeAllGroup = createCloseAllCsvToolBarGroup();
+        JToolBar.Separator panelSeparator = new JToolBar.Separator(new Dimension(10, 0));
+        JToolBar.Separator groupSeparator = new JToolBar.Separator(new Dimension(10, 0));
+        JToolBar.Separator closeSeparator = new JToolBar.Separator(new Dimension(10, 0));
+
         GridBagConstraints constraints = createCsvSearchBarConstraints(0, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createToolBarGroup(new JLabel("検索"), csvSearchComboBox, clearCsvSearchButton), constraints);
-        constraints = createCsvSearchBarConstraints(1, 1.0d, GridBagConstraints.HORIZONTAL);
-        searchBar.add(Box.createHorizontalGlue(), constraints);
+        constraints.weightx = 1.0d;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        searchBar.add(searchGroup, constraints);
+        constraints = createCsvSearchBarConstraints(1, 0.0d, GridBagConstraints.NONE);
+        constraints.insets = new Insets(0, 12, 0, 0);
+        searchBar.add(panelCollapseGroup, constraints);
         constraints = createCsvSearchBarConstraints(2, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createPanelCollapseToolBarGroup(), constraints);
+        searchBar.add(panelSeparator, constraints);
         constraints = createCsvSearchBarConstraints(3, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
+        searchBar.add(groupCollapseGroup, constraints);
         constraints = createCsvSearchBarConstraints(4, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createGroupCollapseToolBarGroup(), constraints);
+        searchBar.add(groupSeparator, constraints);
         constraints = createCsvSearchBarConstraints(5, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
+        searchBar.add(columnWidthGroup, constraints);
         constraints = createCsvSearchBarConstraints(6, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createColumnWidthToolBarGroup(), constraints);
+        searchBar.add(closeSeparator, constraints);
         constraints = createCsvSearchBarConstraints(7, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
-        constraints = createCsvSearchBarConstraints(8, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createCloseAllCsvToolBarGroup(), constraints);
+        searchBar.add(closeAllGroup, constraints);
+        installResponsiveSearchBar(searchBar, searchGroup,
+                new JComponent[] {panelCollapseGroup, panelSeparator},
+                new JComponent[] {groupCollapseGroup, groupSeparator},
+                new JComponent[] {columnWidthGroup, closeSeparator},
+                new JComponent[] {closeAllGroup});
         return searchBar;
     }
 
@@ -442,6 +461,97 @@ public class MainFrame extends JFrame {
         }
         panel.setMaximumSize(panel.getPreferredSize());
         return panel;
+    }
+
+    private static JPanel createSearchToolBarGroup(JComponent label, JComponent searchField, JComponent clearButton) {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setOpaque(false);
+        panel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.gridx = 0;
+        constraints.gridy = 0;
+        constraints.insets = new Insets(0, 0, 0, 2);
+        constraints.anchor = GridBagConstraints.CENTER;
+        panel.add(label, constraints);
+
+        constraints = new GridBagConstraints();
+        constraints.gridx = 1;
+        constraints.gridy = 0;
+        constraints.weightx = 1.0d;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.anchor = GridBagConstraints.CENTER;
+        panel.add(searchField, constraints);
+
+        constraints = new GridBagConstraints();
+        constraints.gridx = 2;
+        constraints.gridy = 0;
+        constraints.insets = new Insets(0, 2, 0, 0);
+        constraints.anchor = GridBagConstraints.CENTER;
+        panel.add(clearButton, constraints);
+
+        int height = Math.max(searchField.getPreferredSize().height, clearButton.getPreferredSize().height);
+        int minWidth = label.getPreferredSize().width
+                + searchField.getMinimumSize().width
+                + clearButton.getPreferredSize().width
+                + 4;
+        panel.setMinimumSize(new Dimension(minWidth, height));
+        return panel;
+    }
+
+    private static void installResponsiveSearchBar(final JToolBar searchBar, final JComponent searchGroup,
+            final JComponent[]... hideGroups) {
+        searchBar.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent event) {
+                updateResponsiveSearchBar(searchBar, searchGroup, hideGroups);
+            }
+        });
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                updateResponsiveSearchBar(searchBar, searchGroup, hideGroups);
+            }
+        });
+    }
+
+    private static void updateResponsiveSearchBar(JToolBar searchBar, JComponent searchGroup,
+            JComponent[][] hideGroups) {
+        for (JComponent[] group : hideGroups) {
+            setComponentsVisible(group, true);
+        }
+        int availableWidth = searchBar.getWidth();
+        if (availableWidth <= 0) {
+            return;
+        }
+        Insets insets = searchBar.getInsets();
+        int usableWidth = Math.max(0, availableWidth - insets.left - insets.right);
+        for (JComponent[] group : hideGroups) {
+            if (calculateResponsiveSearchBarMinimumWidth(searchGroup, hideGroups) <= usableWidth) {
+                break;
+            }
+            setComponentsVisible(group, false);
+        }
+        searchBar.revalidate();
+        searchBar.repaint();
+    }
+
+    private static int calculateResponsiveSearchBarMinimumWidth(JComponent searchGroup, JComponent[][] hideGroups) {
+        int width = searchGroup.getMinimumSize().width;
+        for (JComponent[] group : hideGroups) {
+            for (JComponent component : group) {
+                if (component.isVisible()) {
+                    width += component.getPreferredSize().width;
+                }
+            }
+        }
+        return width;
+    }
+
+    private static void setComponentsVisible(JComponent[] components, boolean visible) {
+        for (JComponent component : components) {
+            component.setVisible(visible);
+        }
     }
 
     private static JButton createCompactToolBarButton(String text) {
@@ -669,6 +779,16 @@ public class MainFrame extends JFrame {
             statusBar.setMessage("Only registered root folders can be removed from the list.");
             return;
         }
+        boolean previousSuppressSessionSaving = suppressSessionSaving;
+        suppressSessionSaving = true;
+        try {
+            if (!csvStackPanel.requestClosePanelsUnderRoots(targetRoots)) {
+                statusBar.setMessage("Root folder removal was canceled.");
+                return;
+            }
+        } finally {
+            suppressSessionSaving = previousSuppressSessionSaving;
+        }
         if (remainingRoots.isEmpty()) {
             rootDirectories.clear();
             clearSavedRootFolders();
@@ -679,6 +799,9 @@ public class MainFrame extends JFrame {
             return;
         }
 
+        rootDirectories.clear();
+        rootDirectories.addAll(remainingRoots);
+        saveOpenSession();
         loadRootFolders(remainingRoots);
         statusBar.setMessage("Removing root folders from the list: " + joinDisplayPaths(new ArrayList<Path>(targetRoots)));
     }
