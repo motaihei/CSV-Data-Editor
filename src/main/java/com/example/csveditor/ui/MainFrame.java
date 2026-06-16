@@ -10,6 +10,8 @@ import javax.swing.JButton;
 import javax.swing.AbstractAction;
 import javax.swing.Box;
 import javax.swing.JComponent;
+import javax.swing.JComboBox;
+import javax.swing.DefaultComboBoxModel;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -27,16 +29,17 @@ import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.text.JTextComponent;
 import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.Graphics;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Image;
+import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyAdapter;
@@ -53,6 +56,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.prefs.Preferences;
 
 /**
@@ -69,7 +73,7 @@ public class MainFrame extends JFrame {
     private final Preferences preferences;
     private JSplitPane leftSplitPane;
     private JTextField columnWidthField;
-    private JTextField csvSearchField;
+    private JComboBox<String> csvSearchComboBox;
     private JPanel loadingOverlayPanel;
     private JLabel loadingOverlayLabel;
     private JProgressBar loadingOverlayProgressBar;
@@ -77,6 +81,7 @@ public class MainFrame extends JFrame {
     private final List<Path> rootDirectories;
     private boolean restoringSession;
     private boolean suppressSessionSaving;
+    private boolean updatingCsvSearchSuggestions;
     private static final String LAST_ROOT_FOLDER_KEY = "lastRootFolder";
     private static final String LAST_ROOT_FOLDERS_KEY = "lastRootFolders";
     private static final String SESSION_ROOT_FOLDER_KEY = "sessionRootFolder";
@@ -106,6 +111,7 @@ public class MainFrame extends JFrame {
         this.csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter());
         this.csvStackPanel.setAutoCollapseRowThreshold(getAutoCollapseRowThreshold());
         this.csvStackPanel.setDataGroupPathSegmentLevel(getDataGroupPathSegmentLevel());
+        this.treePanel.setDataGroupPathSegmentLevel(getDataGroupPathSegmentLevel());
         buildUi();
         installListeners();
         installGlobalKeyBindings();
@@ -296,16 +302,18 @@ public class MainFrame extends JFrame {
         JToolBar searchBar = new JToolBar();
         searchBar.setFloatable(false);
         searchBar.setLayout(new GridBagLayout());
-        csvSearchField = new JTextField();
+        csvSearchComboBox = new JComboBox<String>(new DefaultComboBoxModel<String>());
+        csvSearchComboBox.setEditable(true);
         Dimension csvSearchFieldSize = new Dimension(360, 24);
-        csvSearchField.setPreferredSize(csvSearchFieldSize);
-        csvSearchField.setMinimumSize(csvSearchFieldSize);
-        csvSearchField.setMaximumSize(csvSearchFieldSize);
-        csvSearchField.setToolTipText("開いているCSVパネルをCSVファイル名で絞り込みます。");
+        csvSearchComboBox.setPreferredSize(csvSearchFieldSize);
+        csvSearchComboBox.setMinimumSize(csvSearchFieldSize);
+        csvSearchComboBox.setMaximumSize(csvSearchFieldSize);
+        csvSearchComboBox.setToolTipText("開いているCSVパネルをCSVファイル名で絞り込みます。");
         JButton clearCsvSearchButton = new JButton("クリア");
         clearCsvSearchButton.setEnabled(false);
-        clearCsvSearchButton.addActionListener(e -> csvSearchField.setText(""));
-        csvSearchField.getDocument().addDocumentListener(new DocumentListener() {
+        clearCsvSearchButton.addActionListener(e -> setCsvSearchText(""));
+        JTextComponent csvSearchEditor = (JTextComponent) csvSearchComboBox.getEditor().getEditorComponent();
+        csvSearchEditor.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent event) {
                 updateSearchFilterAndButton();
@@ -322,12 +330,22 @@ public class MainFrame extends JFrame {
             }
 
             private void updateSearchFilterAndButton() {
+                if (updatingCsvSearchSuggestions) {
+                    return;
+                }
                 updateCsvPanelSearchFilter();
-                clearCsvSearchButton.setEnabled(!csvSearchField.getText().isEmpty());
+                clearCsvSearchButton.setEnabled(!getCsvSearchText().isEmpty());
             }
         });
+        csvSearchComboBox.addActionListener(e -> {
+            if (updatingCsvSearchSuggestions) {
+                return;
+            }
+            updateCsvPanelSearchFilter();
+            clearCsvSearchButton.setEnabled(!getCsvSearchText().isEmpty());
+        });
         GridBagConstraints constraints = createCsvSearchBarConstraints(0, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createToolBarGroup(new JLabel("検索"), csvSearchField, clearCsvSearchButton), constraints);
+        searchBar.add(createToolBarGroup(new JLabel("検索"), csvSearchComboBox, clearCsvSearchButton), constraints);
         constraints = createCsvSearchBarConstraints(1, 1.0d, GridBagConstraints.HORIZONTAL);
         searchBar.add(Box.createHorizontalGlue(), constraints);
         constraints = createCsvSearchBarConstraints(2, 0.0d, GridBagConstraints.NONE);
@@ -335,6 +353,10 @@ public class MainFrame extends JFrame {
         constraints = createCsvSearchBarConstraints(3, 0.0d, GridBagConstraints.NONE);
         searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
         constraints = createCsvSearchBarConstraints(4, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(createPanelCollapseToolBarGroup(), constraints);
+        constraints = createCsvSearchBarConstraints(5, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
+        constraints = createCsvSearchBarConstraints(6, 0.0d, GridBagConstraints.NONE);
         searchBar.add(createColumnWidthToolBarGroup(), constraints);
         return searchBar;
     }
@@ -354,7 +376,7 @@ public class MainFrame extends JFrame {
         columnWidthField.setToolTipText("表示中のCSVテーブルへ適用する列幅をpxで指定します。");
         columnWidthField.addActionListener(e -> applyColumnWidthToOpenTables());
 
-        JButton applyColumnWidthButton = new JButton("列幅を全設定");
+        JButton applyColumnWidthButton = createCompactToolBarButton("列幅を設定");
         applyColumnWidthButton.setToolTipText("表示中のCSVテーブルすべての列幅を指定値に変更します。");
         applyColumnWidthButton.addActionListener(e -> applyColumnWidthToOpenTables());
 
@@ -364,7 +386,7 @@ public class MainFrame extends JFrame {
         columnWidthField.setMinimumSize(columnWidthFieldSize);
         columnWidthField.setMaximumSize(columnWidthFieldSize);
 
-        JButton autoFitColumnWidthButton = new JButton("列幅を全自動調整");
+        JButton autoFitColumnWidthButton = createCompactToolBarButton("列幅を自動調整");
         autoFitColumnWidthButton.setToolTipText("表示中のCSVテーブルすべての列幅を列名とセル値に合わせて自動調整します。");
         autoFitColumnWidthButton.addActionListener(e -> autoFitColumnWidthsForOpenTables());
 
@@ -372,21 +394,45 @@ public class MainFrame extends JFrame {
     }
 
     private JPanel createCloseAllCsvToolBarGroup() {
-        JButton closeAllCsvButton = new JButton("すべて閉じる");
+        JButton closeAllCsvButton = createCompactToolBarButton("全て閉じる");
         closeAllCsvButton.setToolTipText("表示中のCSVパネルをすべて閉じます。");
         closeAllCsvButton.addActionListener(e -> closeAllOpenCsvPanels());
         return createToolBarGroup(closeAllCsvButton);
     }
 
+    private JPanel createPanelCollapseToolBarGroup() {
+        JButton collapseAllPanelsButton = createCompactToolBarButton("全て折りたたむ");
+        collapseAllPanelsButton.setToolTipText("表示中のCSVパネルをすべて折りたたみます。");
+        collapseAllPanelsButton.addActionListener(e -> collapseAllOpenCsvPanels());
+
+        JButton expandAllPanelsButton = createCompactToolBarButton("全て展開");
+        expandAllPanelsButton.setToolTipText("表示中のCSVパネルをすべて開きます。");
+        expandAllPanelsButton.addActionListener(e -> expandAllOpenCsvPanels());
+
+        return createToolBarGroup(collapseAllPanelsButton, expandAllPanelsButton);
+    }
+
     private static JPanel createToolBarGroup(JComponent... components) {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        JPanel panel = new JPanel(new GridBagLayout());
         panel.setOpaque(false);
         panel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
-        for (JComponent component : components) {
-            panel.add(component);
+        for (int i = 0; i < components.length; i++) {
+            GridBagConstraints constraints = new GridBagConstraints();
+            constraints.gridx = i;
+            constraints.gridy = 0;
+            constraints.insets = new Insets(0, i == 0 ? 0 : 2, 0, 0);
+            constraints.anchor = GridBagConstraints.CENTER;
+            panel.add(components[i], constraints);
         }
         panel.setMaximumSize(panel.getPreferredSize());
         return panel;
+    }
+
+    private static JButton createCompactToolBarButton(String text) {
+        JButton button = new JButton(text);
+        button.setMargin(new Insets(2, 6, 2, 6));
+        button.setFocusable(false);
+        return button;
     }
 
     private void installListeners() {
@@ -405,6 +451,11 @@ public class MainFrame extends JFrame {
             @Override
             public void rootFolderUnregisterRequested(DataNode node) {
                 unregisterRootFolder(node);
+            }
+
+            @Override
+            public void rootFoldersUnregisterRequested(List<DataNode> nodes) {
+                unregisterRootFolders(nodes);
             }
         });
         csvStackPanel.setSessionChangeListener(new CsvStackPanel.SessionChangeListener() {
@@ -570,12 +621,29 @@ public class MainFrame extends JFrame {
         if (node == null) {
             return;
         }
-        Path targetRoot = node.getPath().toAbsolutePath().normalize();
+        List<DataNode> nodes = new ArrayList<DataNode>();
+        nodes.add(node);
+        unregisterRootFolders(nodes);
+    }
+
+    private void unregisterRootFolders(List<DataNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return;
+        }
+        Set<Path> targetRoots = new HashSet<Path>();
+        for (DataNode node : nodes) {
+            if (node != null) {
+                targetRoots.add(node.getPath().toAbsolutePath().normalize());
+            }
+        }
+        if (targetRoots.isEmpty()) {
+            return;
+        }
         List<Path> remainingRoots = new ArrayList<Path>();
         boolean removed = false;
         for (Path rootDirectory : rootDirectories) {
             Path normalizedRoot = rootDirectory.toAbsolutePath().normalize();
-            if (normalizedRoot.equals(targetRoot)) {
+            if (targetRoots.contains(normalizedRoot)) {
                 removed = true;
             } else {
                 remainingRoots.add(normalizedRoot);
@@ -590,13 +658,13 @@ public class MainFrame extends JFrame {
             clearSavedRootFolders();
             treePanel.setRegisteredRootPaths(rootDirectories);
             treePanel.clear("Select a root folder");
-            statusBar.setMessage("Removed root folder from the list: " + targetRoot);
+            statusBar.setMessage("Removed root folders from the list: " + joinDisplayPaths(new ArrayList<Path>(targetRoots)));
             saveOpenSession();
             return;
         }
 
         loadRootFolders(remainingRoots);
-        statusBar.setMessage("Removing root folder from the list: " + targetRoot);
+        statusBar.setMessage("Removing root folders from the list: " + joinDisplayPaths(new ArrayList<Path>(targetRoots)));
     }
 
     private void clearSavedRootFolders() {
@@ -958,6 +1026,7 @@ public class MainFrame extends JFrame {
         updateDataGroupListVisibility();
         dataGroupListPanel.setGroupKeys(csvStackPanel.getOpenGroupKeys());
         dataGroupListPanel.setSelectedGroupKey(csvStackPanel.getActiveGroupKey());
+        updateCsvSearchSuggestions();
     }
 
     private void updateDataGroupListVisibility() {
@@ -997,6 +1066,7 @@ public class MainFrame extends JFrame {
             csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter(rowClipboardDelimiterType));
             csvStackPanel.setAutoCollapseRowThreshold(autoCollapseRowThreshold);
             csvStackPanel.setDataGroupPathSegmentLevel(dataGroupPathSegmentLevel);
+            treePanel.setDataGroupPathSegmentLevel(dataGroupPathSegmentLevel);
             saveOpenSession();
             return true;
         }
@@ -1014,6 +1084,7 @@ public class MainFrame extends JFrame {
             csvStackPanel.setRowClipboardDelimiter(getRowClipboardDelimiter(rowClipboardDelimiterType));
             csvStackPanel.setAutoCollapseRowThreshold(autoCollapseRowThreshold);
             csvStackPanel.setDataGroupPathSegmentLevel(dataGroupPathSegmentLevel);
+            treePanel.setDataGroupPathSegmentLevel(dataGroupPathSegmentLevel);
             updateOpenGroupList();
         } finally {
             suppressSessionSaving = previousSuppressSessionSaving;
@@ -1176,8 +1247,58 @@ public class MainFrame extends JFrame {
         statusBar.setMessage("Auto-fitted column widths for open CSV tables.");
     }
 
+    private void collapseAllOpenCsvPanels() {
+        csvStackPanel.setAllOpenPanelsCollapsed(true);
+        statusBar.setMessage("Collapsed all open CSV panels.");
+    }
+
+    private void expandAllOpenCsvPanels() {
+        csvStackPanel.setAllOpenPanelsCollapsed(false);
+        statusBar.setMessage("Expanded all open CSV panels.");
+    }
+
     private void updateCsvPanelSearchFilter() {
-        csvStackPanel.setCsvFileNameFilter(csvSearchField == null ? "" : csvSearchField.getText());
+        csvStackPanel.setCsvFileNameFilter(getCsvSearchText());
+    }
+
+    private String getCsvSearchText() {
+        if (csvSearchComboBox == null) {
+            return "";
+        }
+        Object editorItem = csvSearchComboBox.getEditor().getItem();
+        return editorItem == null ? "" : editorItem.toString();
+    }
+
+    private void setCsvSearchText(String text) {
+        if (csvSearchComboBox == null) {
+            return;
+        }
+        csvSearchComboBox.getEditor().setItem(text == null ? "" : text);
+    }
+
+    private void updateCsvSearchSuggestions() {
+        if (csvSearchComboBox == null) {
+            return;
+        }
+        String currentText = getCsvSearchText();
+        TreeSet<String> fileNames = new TreeSet<String>(String.CASE_INSENSITIVE_ORDER);
+        for (CsvEditorPanel panel : csvStackPanel.getOpenPanels()) {
+            String fileName = panel.getDocument().getFileName();
+            if (fileName != null && !fileName.isEmpty()) {
+                fileNames.add(fileName);
+            }
+        }
+        updatingCsvSearchSuggestions = true;
+        try {
+            DefaultComboBoxModel<String> model = new DefaultComboBoxModel<String>();
+            for (String fileName : fileNames) {
+                model.addElement(fileName);
+            }
+            csvSearchComboBox.setModel(model);
+            csvSearchComboBox.setSelectedItem(currentText);
+        } finally {
+            updatingCsvSearchSuggestions = false;
+        }
     }
 
     private void closeAllOpenCsvPanels() {

@@ -13,10 +13,12 @@ import javax.swing.JSeparator;
 import javax.swing.JTree;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
+import javax.swing.ToolTipManager;
 import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
+import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -33,6 +35,7 @@ import java.awt.event.MouseEvent;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -43,6 +46,9 @@ public class CsvDataTreePanel extends JPanel {
     private static final String SYNTHETIC_MULTI_ROOT_NAME = "選択ルート";
     private static final Color ROOT_FOLDER_ICON_COLOR = new Color(36, 143, 154);
     private static final Color ROOT_FOLDER_ICON_BORDER_COLOR = new Color(20, 95, 105);
+    private static final Color DATA_GROUP_FOLDER_ICON_COLOR = new Color(70, 142, 104);
+    private static final Color DATA_GROUP_FOLDER_ICON_BORDER_COLOR = new Color(37, 94, 66);
+    private static final String ROOT_PARENT_PATH_COLOR = "#8A8F98";
 
     public interface CsvOpenListener {
         void csvOpenRequested(DataNode node);
@@ -52,6 +58,8 @@ public class CsvDataTreePanel extends JPanel {
 
     public interface RootFolderRegistrationListener {
         void rootFolderUnregisterRequested(DataNode node);
+
+        void rootFoldersUnregisterRequested(List<DataNode> nodes);
     }
 
     private final JTree tree;
@@ -65,17 +73,20 @@ public class CsvDataTreePanel extends JPanel {
     private final Set<Path> registeredRootPaths;
     private CsvOpenListener csvOpenListener;
     private RootFolderRegistrationListener rootFolderRegistrationListener;
+    private int dataGroupPathSegmentLevel = 2;
 
     public CsvDataTreePanel() {
         super(new BorderLayout());
         setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
-        add(new JLabel("CSV data"), BorderLayout.NORTH);
+        add(new JLabel("Folder"), BorderLayout.NORTH);
 
         DefaultMutableTreeNode placeholder = new DefaultMutableTreeNode("Select a root folder");
         this.tree = new JTree(new DefaultTreeModel(placeholder));
         this.tree.setRootVisible(true);
         this.tree.setShowsRootHandles(false);
+        this.tree.getSelectionModel().setSelectionMode(TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION);
         this.tree.setCellRenderer(new RootAwareTreeCellRenderer());
+        ToolTipManager.sharedInstance().registerComponent(this.tree);
         this.registeredRootPaths = new HashSet<Path>();
 
         this.folderPopupMenu = new JPopupMenu();
@@ -138,6 +149,15 @@ public class CsvDataTreePanel extends JPanel {
                 registeredRootPaths.add(rootPath.toAbsolutePath().normalize());
             }
         }
+    }
+
+    public void setDataGroupPathSegmentLevel(int dataGroupPathSegmentLevel) {
+        int normalizedLevel = Math.max(1, dataGroupPathSegmentLevel);
+        if (this.dataGroupPathSegmentLevel == normalizedLevel) {
+            return;
+        }
+        this.dataGroupPathSegmentLevel = normalizedLevel;
+        tree.repaint();
     }
 
     public void setRootNode(final DataNode rootNode) {
@@ -203,30 +223,36 @@ public class CsvDataTreePanel extends JPanel {
             return;
         }
 
-        tree.setSelectionPath(path);
         DataNode node = getDataNode(path);
         if (node == null) {
             return;
         }
         if (node.isCsvFile()) {
+            tree.setSelectionPath(path);
             csvFilePopupMenu.show(tree, event.getX(), event.getY());
             return;
         }
 
-        openDescendantCsvItem.setEnabled(!collectCsvNodes(node).isEmpty());
-        boolean registeredRootSelection = isRegisteredRootSelection(path, node);
-        unregisterRootFolderSeparator.setVisible(registeredRootSelection);
-        unregisterRootFolderItem.setVisible(registeredRootSelection);
+        if (!tree.isPathSelected(path)) {
+            tree.setSelectionPath(path);
+        }
+        List<TreePath> selectedFolderPaths = getSelectedFolderPaths();
+        openDescendantCsvItem.setEnabled(hasDescendantCsv(selectedFolderPaths));
+        boolean hasRegisteredRootSelection = hasRegisteredRootSelection(selectedFolderPaths);
+        unregisterRootFolderSeparator.setVisible(hasRegisteredRootSelection);
+        unregisterRootFolderItem.setVisible(hasRegisteredRootSelection);
         folderPopupMenu.show(tree, event.getX(), event.getY());
     }
 
     private void expandSelectedTreeOnly() {
-        TreePath selectionPath = tree.getSelectionPath();
-        if (selectionPath == null) {
+        List<TreePath> selectedFolderPaths = getSelectedFolderPaths();
+        if (selectedFolderPaths.isEmpty()) {
             return;
         }
 
-        expandDescendants(selectionPath);
+        for (TreePath selectedFolderPath : selectedFolderPaths) {
+            expandDescendants(selectedFolderPath);
+        }
     }
 
     private void openSelectedCsv() {
@@ -248,22 +274,19 @@ public class CsvDataTreePanel extends JPanel {
     }
 
     private void openDescendantCsvFiles() {
-        TreePath selectionPath = tree.getSelectionPath();
-        if (selectionPath == null || csvOpenListener == null) {
+        List<TreePath> selectedFolderPaths = getSelectedFolderPaths();
+        if (selectedFolderPaths.isEmpty() || csvOpenListener == null) {
             return;
         }
 
-        DataNode node = getDataNode(selectionPath);
-        if (node == null || node.isCsvFile()) {
-            return;
-        }
-
-        List<DataNode> csvNodes = collectCsvNodes(node);
+        List<DataNode> csvNodes = collectCsvNodes(selectedFolderPaths);
         if (csvNodes.isEmpty()) {
             return;
         }
 
-        expandDescendants(selectionPath);
+        for (TreePath selectedFolderPath : selectedFolderPaths) {
+            expandDescendants(selectedFolderPath);
+        }
         csvOpenListener.csvOpenRequested(csvNodes);
     }
 
@@ -284,17 +307,20 @@ public class CsvDataTreePanel extends JPanel {
     }
 
     private void unregisterSelectedRootFolder() {
-        TreePath selectionPath = tree.getSelectionPath();
-        if (selectionPath == null || rootFolderRegistrationListener == null) {
+        if (rootFolderRegistrationListener == null) {
             return;
         }
 
-        DataNode node = getDataNode(selectionPath);
-        if (node == null || !isRegisteredRootSelection(selectionPath, node)) {
+        List<DataNode> nodes = getSelectedRegisteredRootNodes();
+        if (nodes.isEmpty()) {
             return;
         }
 
-        rootFolderRegistrationListener.rootFolderUnregisterRequested(node);
+        if (nodes.size() == 1) {
+            rootFolderRegistrationListener.rootFolderUnregisterRequested(nodes.get(0));
+        } else {
+            rootFolderRegistrationListener.rootFoldersUnregisterRequested(nodes);
+        }
     }
 
     private boolean isRegisteredRootSelection(TreePath path, DataNode node) {
@@ -320,6 +346,18 @@ public class CsvDataTreePanel extends JPanel {
         return isRegisteredRootSelection(path, node);
     }
 
+    private boolean isDataGroupFolderTreePath(TreePath path) {
+        if (path == null) {
+            return false;
+        }
+        DataNode node = getDataNode(path);
+        if (node == null || !node.isDirectory() || isRegisteredRootSelection(path, node)) {
+            return false;
+        }
+        Path relativePath = node.getRelativePath();
+        return relativePath != null && relativePath.getNameCount() == dataGroupPathSegmentLevel;
+    }
+
     private boolean isSyntheticMultiRootNode(DataNode node) {
         return node != null
                 && registeredRootPaths.size() > 1
@@ -327,6 +365,73 @@ public class CsvDataTreePanel extends JPanel {
     }
 
     private DataNode getDataNode(TreePath path) {
+        Object component = path.getLastPathComponent();
+        if (!(component instanceof DefaultMutableTreeNode)) {
+            return null;
+        }
+        Object userObject = ((DefaultMutableTreeNode) component).getUserObject();
+        return userObject instanceof DataNode ? (DataNode) userObject : null;
+    }
+
+    private List<TreePath> getSelectedFolderPaths() {
+        List<TreePath> selectedFolderPaths = new ArrayList<TreePath>();
+        TreePath[] selectionPaths = tree.getSelectionPaths();
+        if (selectionPaths == null) {
+            return selectedFolderPaths;
+        }
+        for (TreePath selectionPath : selectionPaths) {
+            DataNode node = getDataNode(selectionPath);
+            if (node != null && node.isDirectory()) {
+                selectedFolderPaths.add(selectionPath);
+            }
+        }
+        return selectedFolderPaths;
+    }
+
+    private boolean hasDescendantCsv(List<TreePath> folderPaths) {
+        for (TreePath folderPath : folderPaths) {
+            DataNode node = getDataNode(folderPath);
+            if (node != null && !collectCsvNodes(node).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasRegisteredRootSelection(List<TreePath> folderPaths) {
+        for (TreePath folderPath : folderPaths) {
+            DataNode node = getDataNode(folderPath);
+            if (isRegisteredRootSelection(folderPath, node)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<DataNode> getSelectedRegisteredRootNodes() {
+        List<DataNode> nodes = new ArrayList<DataNode>();
+        for (TreePath folderPath : getSelectedFolderPaths()) {
+            DataNode node = getDataNode(folderPath);
+            if (isRegisteredRootSelection(folderPath, node)) {
+                nodes.add(node);
+            }
+        }
+        return nodes;
+    }
+
+    private static List<DataNode> collectCsvNodes(List<TreePath> folderPaths) {
+        List<DataNode> csvNodes = new ArrayList<DataNode>();
+        Set<Path> seenPaths = new LinkedHashSet<Path>();
+        for (TreePath folderPath : folderPaths) {
+            DataNode node = getStaticDataNode(folderPath);
+            if (node != null) {
+                collectCsvNodes(node, csvNodes, seenPaths);
+            }
+        }
+        return csvNodes;
+    }
+
+    private static DataNode getStaticDataNode(TreePath path) {
         Object component = path.getLastPathComponent();
         if (!(component instanceof DefaultMutableTreeNode)) {
             return null;
@@ -348,6 +453,19 @@ public class CsvDataTreePanel extends JPanel {
         }
         for (DataNode child : node.getChildren()) {
             collectCsvNodes(child, csvNodes);
+        }
+    }
+
+    private static void collectCsvNodes(DataNode node, List<DataNode> csvNodes, Set<Path> seenPaths) {
+        if (node.isCsvFile()) {
+            Path normalizedPath = node.getPath().toAbsolutePath().normalize();
+            if (seenPaths.add(normalizedPath)) {
+                csvNodes.add(node);
+            }
+            return;
+        }
+        for (DataNode child : node.getChildren()) {
+            collectCsvNodes(child, csvNodes, seenPaths);
         }
     }
 
@@ -382,24 +500,101 @@ public class CsvDataTreePanel extends JPanel {
     }
 
     private final class RootAwareTreeCellRenderer extends DefaultTreeCellRenderer {
-        private final Icon rootFolderIcon = new RootFolderIcon();
+        private final Icon rootFolderIcon = new FolderIcon(ROOT_FOLDER_ICON_COLOR, ROOT_FOLDER_ICON_BORDER_COLOR);
+        private final Icon dataGroupFolderIcon = new FolderIcon(
+                DATA_GROUP_FOLDER_ICON_COLOR, DATA_GROUP_FOLDER_ICON_BORDER_COLOR);
 
         @Override
         public Component getTreeCellRendererComponent(JTree tree, Object value, boolean selected,
                 boolean expanded, boolean leaf, int row, boolean hasFocus) {
             Component component = super.getTreeCellRendererComponent(
                     tree, value, selected, expanded, leaf, row, hasFocus);
+            setToolTipText(null);
             TreePath path = tree.getPathForRow(row);
             if (isRegisteredRootTreePath(path)) {
                 setIcon(rootFolderIcon);
+                DataNode node = getDataNode(path);
+                if (node != null) {
+                    setText(formatRootFolderText(node));
+                    setToolTipText(formatRootFolderToolTipText(node));
+                }
+            }
+            if (isDataGroupFolderTreePath(path)) {
+                setIcon(dataGroupFolderIcon);
             }
             return component;
         }
     }
 
-    private static final class RootFolderIcon implements Icon {
+    private static String formatRootFolderText(DataNode node) {
+        Path rootPath = node.getPath();
+        Path parentPath = rootPath == null ? null : rootPath.getParent();
+        String rootName = rootPath == null || rootPath.getFileName() == null
+                ? node.getDisplayName()
+                : rootPath.getFileName().toString();
+        if (parentPath == null) {
+            return htmlText(null, rootName);
+        }
+        return htmlText(parentPath.toAbsolutePath().normalize().toString(), rootName);
+    }
+
+    private static String formatRootFolderToolTipText(DataNode node) {
+        Path rootPath = node.getPath();
+        return rootPath == null ? node.getDisplayName() : rootPath.toAbsolutePath().normalize().toString();
+    }
+
+    private static String htmlText(String prefix, String text) {
+        StringBuilder builder = new StringBuilder("<html>");
+        builder.append(escapeHtml(text));
+        if (prefix != null && !prefix.isEmpty()) {
+            builder.append("&nbsp;<span style=\"color:")
+                    .append(ROOT_PARENT_PATH_COLOR)
+                    .append(";\">")
+                    .append(escapeHtml(prefix))
+                    .append("\\</span>");
+        }
+        builder.append("</html>");
+        return builder.toString();
+    }
+
+    private static String escapeHtml(String text) {
+        if (text == null) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char character = text.charAt(i);
+            switch (character) {
+                case '&':
+                    builder.append("&amp;");
+                    break;
+                case '<':
+                    builder.append("&lt;");
+                    break;
+                case '>':
+                    builder.append("&gt;");
+                    break;
+                case '"':
+                    builder.append("&quot;");
+                    break;
+                default:
+                    builder.append(character);
+                    break;
+            }
+        }
+        return builder.toString();
+    }
+
+    private static final class FolderIcon implements Icon {
         private static final int WIDTH = 16;
         private static final int HEIGHT = 16;
+        private final Color fillColor;
+        private final Color borderColor;
+
+        private FolderIcon(Color fillColor, Color borderColor) {
+            this.fillColor = fillColor;
+            this.borderColor = borderColor;
+        }
 
         @Override
         public int getIconWidth() {
@@ -423,9 +618,9 @@ public class CsvDataTreePanel extends JPanel {
                 tab.addPoint(x + 15, y + 7);
                 tab.addPoint(x + 15, y + 13);
                 tab.addPoint(x + 1, y + 13);
-                g.setColor(ROOT_FOLDER_ICON_COLOR);
+                g.setColor(fillColor);
                 g.fillPolygon(tab);
-                g.setColor(ROOT_FOLDER_ICON_BORDER_COLOR);
+                g.setColor(borderColor);
                 g.drawPolygon(tab);
                 g.drawLine(x + 2, y + 8, x + 14, y + 8);
             } finally {

@@ -17,6 +17,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JViewport;
 import javax.swing.BoxLayout;
+import javax.swing.Box;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.UIManager;
@@ -85,11 +86,12 @@ public final class CsvEditorPanel extends JPanel {
     private final CsvDocumentService documentService;
     private static final int MAX_UNDO_HISTORY = 5;
     private static final int OPEN_FOLDER_BUTTON_WIDTH = 112;
-    private static final int TABLE_HORIZONTAL_SCROLL_BAR_HEIGHT = 8;
+    private static final int TABLE_HORIZONTAL_SCROLL_BAR_HEIGHT = 12;
     private static final Color DIRTY_BACKGROUND = new Color(255, 250, 218);
     private static final Color COLLAPSED_BACKGROUND = new Color(198, 198, 198);
     private static final Color COLLAPSED_DIRTY_BACKGROUND = new Color(210, 204, 178);
     private static final Color PIVOT_TABLE_BORDER = new Color(73, 178, 205);
+    private static final Color MOVE_BUTTON_BACKGROUND = new Color(230, 230, 230);
     private static final String DEFAULT_ROW_CLIPBOARD_DELIMITER = "\t";
     private CsvDocument document;
     private CsvTableModel tableModel;
@@ -383,8 +385,10 @@ public final class CsvEditorPanel extends JPanel {
         openFolderButton = createCompactButton("フォルダを開く");
         moveUpButton = createCompactButton("↑");
         moveDownButton = createCompactButton("↓");
+        configureMoveButtonBackground(moveUpButton);
+        configureMoveButtonBackground(moveDownButton);
         collapseButton = createCompactButton("▾");
-        pivotButton = createCompactButton("入替");
+        pivotButton = createCompactButton("行⇔列");
         collapseButton.setToolTipText("このCSVパネルを折りたたみ/展開します。");
         pivotButton.setToolTipText("行表示と列表示を入れ替えます。");
         openFolderButton.setToolTipText("このCSVファイルが格納されているフォルダーをエクスプローラーで開きます。");
@@ -427,22 +431,26 @@ public final class CsvEditorPanel extends JPanel {
         JPanel moveButtonsContentPanel = new JPanel();
         moveButtonsContentPanel.setLayout(new BoxLayout(moveButtonsContentPanel, BoxLayout.Y_AXIS));
         moveButtonsContentPanel.setOpaque(false);
-        JPanel moveButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 1, 0));
+        JPanel moveButtonRow = new JPanel(new BorderLayout(1, 0));
         Dimension moveButtonRowSize = new Dimension(OPEN_FOLDER_BUTTON_WIDTH, 20);
         moveButtonRow.setPreferredSize(moveButtonRowSize);
         moveButtonRow.setMinimumSize(moveButtonRowSize);
         moveButtonRow.setMaximumSize(moveButtonRowSize);
         moveButtonRow.setOpaque(false);
         moveButtonRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        moveButtonRow.add(moveUpButton);
-        moveButtonRow.add(moveDownButton);
-        moveButtonRow.add(collapseButton);
+        JPanel moveButtonPairPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 1, 0));
+        moveButtonPairPanel.setOpaque(false);
+        moveButtonPairPanel.add(moveUpButton);
+        moveButtonPairPanel.add(moveDownButton);
+        moveButtonRow.add(moveButtonPairPanel, BorderLayout.WEST);
+        moveButtonRow.add(collapseButton, BorderLayout.EAST);
         Dimension openFolderButtonSize = new Dimension(OPEN_FOLDER_BUTTON_WIDTH, 22);
         openFolderButton.setPreferredSize(openFolderButtonSize);
         openFolderButton.setMinimumSize(openFolderButtonSize);
         openFolderButton.setMaximumSize(openFolderButtonSize);
         openFolderButton.setAlignmentX(Component.LEFT_ALIGNMENT);
         moveButtonsContentPanel.add(moveButtonRow);
+        moveButtonsContentPanel.add(Box.createVerticalStrut(2));
         moveButtonsContentPanel.add(openFolderButton);
         moveButtonsPanel.add(moveButtonsContentPanel, BorderLayout.NORTH);
         Dimension moveButtonsPanelSize = new Dimension(OPEN_FOLDER_BUTTON_WIDTH, 44);
@@ -972,7 +980,7 @@ public final class CsvEditorPanel extends JPanel {
 
     private void updatePivotButtonText() {
         if (pivotButton != null) {
-            pivotButton.setText(tableModel != null && tableModel.isTransposed() ? "戻す" : "入替");
+            pivotButton.setText(tableModel != null && tableModel.isTransposed() ? "戻す" : "行⇔列");
         }
     }
 
@@ -1003,7 +1011,7 @@ public final class CsvEditorPanel extends JPanel {
             pathLabel.setVisible(!collapsed);
         }
         if (summaryLabel != null) {
-            summaryLabel.setVisible(!collapsed);
+            summaryLabel.setVisible(true);
         }
         updateCollapsedTitleLayout();
         if (actionsPanel != null) {
@@ -1065,7 +1073,7 @@ public final class CsvEditorPanel extends JPanel {
                 titleHeaderPanel.add(titleLabel);
             }
             titleHeaderPanel.setVisible(true);
-            titleDetailsPanel.setVisible(false);
+            titleDetailsPanel.setVisible(true);
         } else {
             if (currentParent != titleDetailsPanel) {
                 if (currentParent != null) {
@@ -1374,10 +1382,16 @@ public final class CsvEditorPanel extends JPanel {
             width = 56;
         } else if ("閉じる".equals(button.getText())) {
             width = 54;
+        } else if ("行⇔列".equals(button.getText()) || "戻す".equals(button.getText())) {
+            width = 58;
         } else if ("フォルダを開く".equals(button.getText())) {
             width = OPEN_FOLDER_BUTTON_WIDTH;
-        } else if ("↑".equals(button.getText()) || "↓".equals(button.getText())
-                || "▾".equals(button.getText()) || "▸".equals(button.getText())) {
+        } else if ("↑".equals(button.getText()) || "↓".equals(button.getText())) {
+            button.setMargin(new Insets(0, 0, 0, 0));
+            button.setPreferredSize(new Dimension(18, 18));
+            button.setMinimumSize(new Dimension(18, 18));
+            return;
+        } else if ("▾".equals(button.getText()) || "▸".equals(button.getText())) {
             button.setMargin(new Insets(0, 0, 0, 0));
             button.setPreferredSize(new Dimension(22, 20));
             button.setMinimumSize(new Dimension(22, 20));
@@ -1391,6 +1405,13 @@ public final class CsvEditorPanel extends JPanel {
         JButton button = new RoundedButton(text);
         configureCompactButton(button);
         return button;
+    }
+
+    private void configureMoveButtonBackground(JButton button) {
+        button.setBackground(MOVE_BUTTON_BACKGROUND);
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
+        button.setBorderPainted(true);
     }
 
     private void attachDirtyListener(CsvTableModel model) {

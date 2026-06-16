@@ -344,6 +344,14 @@ public class CsvStackPanel extends JScrollPane {
         }
     }
 
+    public void setAllOpenPanelsCollapsed(boolean collapsed) {
+        for (CsvEditorPanel panel : getOpenPanels()) {
+            panel.setCollapsed(collapsed);
+        }
+        contentPanel.revalidate();
+        contentPanel.repaint();
+    }
+
     public boolean requestCloseAll() {
         if (!confirmCloseAllForApplicationExit()) {
             return false;
@@ -649,8 +657,8 @@ public class CsvStackPanel extends JScrollPane {
         closeGroupButton.setToolTipText("このデータグループ内のCSVをすべて閉じます。");
         closeGroupButton.addActionListener(e -> closeGroup(groupKey));
 
-        headerPanel.add(groupNameLabel);
         headerPanel.add(collapseButton);
+        headerPanel.add(groupNameLabel);
         headerPanel.add(closeGroupButton);
         return headerPanel;
     }
@@ -677,15 +685,96 @@ public class CsvStackPanel extends JScrollPane {
         boolean closeAllButton = "すべて閉じる".equals(text);
         button.setMargin(closeAllButton ? new java.awt.Insets(0, 4, 0, 4) : new java.awt.Insets(0, 0, 1, 0));
         if (!closeAllButton) {
-            button.setFont(button.getFont().deriveFont(Font.BOLD, 13f));
+            button.setFont(button.getFont().deriveFont(Font.BOLD, 12f));
         }
-        button.setPreferredSize(new Dimension(closeAllButton ? 92 : 34, 24));
+        button.setPreferredSize(new Dimension(closeAllButton ? 92 : 28, closeAllButton ? 24 : 20));
         button.setMinimumSize(button.getPreferredSize());
         return button;
     }
 
     private String getGroupKey(CsvEditorPanel panel) {
-        return groupKeyResolver.resolve(panel.getDocument().getRelativePath());
+        CsvDocument document = panel.getDocument();
+        Path relativePath = document.getRelativePath();
+        Path relativeGroupPath = getRelativeGroupPath(relativePath);
+        String shortGroupKey;
+        if (relativeGroupPath == null) {
+            shortGroupKey = groupKeyResolver.resolve(relativePath);
+        } else {
+            shortGroupKey = relativeGroupPath.toString();
+        }
+        if (!hasDuplicateGroupKey(panel, shortGroupKey)) {
+            return shortGroupKey;
+        }
+        return rootDisplayName(document) + "\\" + shortGroupKey;
+    }
+
+    private Path getRelativeGroupPath(Path relativePath) {
+        if (relativePath == null || relativePath.getNameCount() <= 1) {
+            return null;
+        }
+        int directoryCount = relativePath.getNameCount() - 1;
+        int groupNameCount = Math.min(dataGroupPathSegmentLevel, directoryCount);
+        if (groupNameCount <= 0) {
+            return null;
+        }
+        return relativePath.subpath(0, groupNameCount);
+    }
+
+    private boolean hasDuplicateGroupKey(CsvEditorPanel targetPanel, String shortGroupKey) {
+        Path targetGroupPath = getGroupAbsolutePath(targetPanel.getDocument());
+        for (CsvEditorPanel panel : panelsByPath.values()) {
+            if (panel == targetPanel) {
+                continue;
+            }
+            String otherShortGroupKey = getShortGroupKey(panel.getDocument());
+            if (!shortGroupKey.equals(otherShortGroupKey)) {
+                continue;
+            }
+            Path otherGroupPath = getGroupAbsolutePath(panel.getDocument());
+            if (targetGroupPath == null || otherGroupPath == null || !targetGroupPath.equals(otherGroupPath)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String getShortGroupKey(CsvDocument document) {
+        Path relativePath = document.getRelativePath();
+        Path relativeGroupPath = getRelativeGroupPath(relativePath);
+        return relativeGroupPath == null ? groupKeyResolver.resolve(relativePath) : relativeGroupPath.toString();
+    }
+
+    private Path getGroupAbsolutePath(CsvDocument document) {
+        Path rootPath = getRootPath(document);
+        if (rootPath == null) {
+            return null;
+        }
+        Path relativeGroupPath = getRelativeGroupPath(document.getRelativePath());
+        return relativeGroupPath == null
+                ? rootPath.toAbsolutePath().normalize()
+                : rootPath.resolve(relativeGroupPath).toAbsolutePath().normalize();
+    }
+
+    private static String rootDisplayName(CsvDocument document) {
+        Path rootPath = getRootPath(document);
+        if (rootPath == null) {
+            return "root";
+        }
+        Path fileName = rootPath.getFileName();
+        return fileName == null ? rootPath.toString() : fileName.toString();
+    }
+
+    private static Path getRootPath(CsvDocument document) {
+        if (document == null || document.getFilePath() == null) {
+            return null;
+        }
+        Path rootPath = document.getFilePath().toAbsolutePath().normalize();
+        Path relativePath = document.getRelativePath();
+        int levels = relativePath == null ? 1 : relativePath.getNameCount();
+        for (int i = 0; i < levels && rootPath != null; i++) {
+            rootPath = rootPath.getParent();
+        }
+        return rootPath;
     }
 
     private boolean shouldAutoCollapse(CsvDocument document) {
