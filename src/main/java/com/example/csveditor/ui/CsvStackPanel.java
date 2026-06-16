@@ -352,6 +352,18 @@ public class CsvStackPanel extends JScrollPane {
         contentPanel.repaint();
     }
 
+    public void setAllOpenGroupsCollapsed(boolean collapsed) {
+        if (!dataGroupingEnabled) {
+            return;
+        }
+        collapsedGroupKeys.clear();
+        if (collapsed) {
+            collapsedGroupKeys.addAll(getOpenGroupKeys());
+        }
+        rebuildContentPanel();
+        notifySessionChanged();
+    }
+
     public boolean requestCloseAll() {
         if (!confirmCloseAllForApplicationExit()) {
             return false;

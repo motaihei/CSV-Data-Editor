@@ -349,15 +349,19 @@ public class MainFrame extends JFrame {
         constraints = createCsvSearchBarConstraints(1, 1.0d, GridBagConstraints.HORIZONTAL);
         searchBar.add(Box.createHorizontalGlue(), constraints);
         constraints = createCsvSearchBarConstraints(2, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createCloseAllCsvToolBarGroup(), constraints);
+        searchBar.add(createPanelCollapseToolBarGroup(), constraints);
         constraints = createCsvSearchBarConstraints(3, 0.0d, GridBagConstraints.NONE);
         searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
         constraints = createCsvSearchBarConstraints(4, 0.0d, GridBagConstraints.NONE);
-        searchBar.add(createPanelCollapseToolBarGroup(), constraints);
+        searchBar.add(createGroupCollapseToolBarGroup(), constraints);
         constraints = createCsvSearchBarConstraints(5, 0.0d, GridBagConstraints.NONE);
         searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
         constraints = createCsvSearchBarConstraints(6, 0.0d, GridBagConstraints.NONE);
         searchBar.add(createColumnWidthToolBarGroup(), constraints);
+        constraints = createCsvSearchBarConstraints(7, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(new JToolBar.Separator(new Dimension(10, 0)), constraints);
+        constraints = createCsvSearchBarConstraints(8, 0.0d, GridBagConstraints.NONE);
+        searchBar.add(createCloseAllCsvToolBarGroup(), constraints);
         return searchBar;
     }
 
@@ -410,6 +414,18 @@ public class MainFrame extends JFrame {
         expandAllPanelsButton.addActionListener(e -> expandAllOpenCsvPanels());
 
         return createToolBarGroup(collapseAllPanelsButton, expandAllPanelsButton);
+    }
+
+    private JPanel createGroupCollapseToolBarGroup() {
+        JButton collapseAllGroupsButton = createCompactToolBarButton("グループを全て折りたたむ");
+        collapseAllGroupsButton.setToolTipText("表示中のデータグループをすべて折りたたみます。");
+        collapseAllGroupsButton.addActionListener(e -> collapseAllOpenDataGroups());
+
+        JButton expandAllGroupsButton = createCompactToolBarButton("グループを全て展開");
+        expandAllGroupsButton.setToolTipText("表示中のデータグループをすべて展開します。");
+        expandAllGroupsButton.addActionListener(e -> expandAllOpenDataGroups());
+
+        return createToolBarGroup(collapseAllGroupsButton, expandAllGroupsButton);
     }
 
     private static JPanel createToolBarGroup(JComponent... components) {
@@ -1255,6 +1271,16 @@ public class MainFrame extends JFrame {
     private void expandAllOpenCsvPanels() {
         csvStackPanel.setAllOpenPanelsCollapsed(false);
         statusBar.setMessage("Expanded all open CSV panels.");
+    }
+
+    private void collapseAllOpenDataGroups() {
+        csvStackPanel.setAllOpenGroupsCollapsed(true);
+        statusBar.setMessage("Collapsed all open data groups.");
+    }
+
+    private void expandAllOpenDataGroups() {
+        csvStackPanel.setAllOpenGroupsCollapsed(false);
+        statusBar.setMessage("Expanded all open data groups.");
     }
 
     private void updateCsvPanelSearchFilter() {
