@@ -6,6 +6,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Icon;
 import javax.swing.JMenuItem;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
@@ -98,7 +99,7 @@ public class CsvDataTreePanel extends JPanel {
                 expandSelectedTreeOnly();
             }
         });
-        this.openDescendantCsvItem = new JMenuItem("ツリーを展開してファイルを開く");
+        this.openDescendantCsvItem = new JMenuItem("配下のファイルを全て開く");
         this.openDescendantCsvItem.addActionListener(new javax.swing.AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent event) {
@@ -284,10 +285,39 @@ public class CsvDataTreePanel extends JPanel {
             return;
         }
 
-        for (TreePath selectedFolderPath : selectedFolderPaths) {
-            expandDescendants(selectedFolderPath);
+        Boolean expandTree = confirmExpandBeforeOpening();
+        if (expandTree == null) {
+            return;
+        }
+        if (expandTree.booleanValue()) {
+            for (TreePath selectedFolderPath : selectedFolderPaths) {
+                expandDescendants(selectedFolderPath);
+            }
         }
         csvOpenListener.csvOpenRequested(csvNodes);
+    }
+
+    private Boolean confirmExpandBeforeOpening() {
+        Object[] options = {
+                "ツリーを展開して開く",
+                "展開せずに開く",
+                "キャンセル"
+        };
+        int result = JOptionPane.showOptionDialog(this,
+                "配下のCSVファイルを開きます。ツリーも展開しますか？",
+                "配下のファイルを全て開く",
+                JOptionPane.YES_NO_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0]);
+        if (result == JOptionPane.YES_OPTION) {
+            return Boolean.TRUE;
+        }
+        if (result == JOptionPane.NO_OPTION) {
+            return Boolean.FALSE;
+        }
+        return null;
     }
 
     private void copySelectedCsvFileName() {

@@ -544,6 +544,7 @@ public class CsvStackPanel extends JScrollPane {
                 revalidate();
                 repaint();
                 refreshOpenTableSizesLater();
+                initializeDisplayedPanelSynchronizationLater();
                 return;
             }
 
@@ -565,7 +566,7 @@ public class CsvStackPanel extends JScrollPane {
             for (Map.Entry<String, List<CsvEditorPanel>> entry : groupedPanels.entrySet()) {
                 String groupKey = entry.getKey();
                 boolean active = groupKey.equals(activeGroupKey);
-                JPanel groupPanel = createGroupPanel(groupKey, active);
+                JPanel groupPanel = createGroupPanel(groupKey, active, entry.getValue().get(0).getDocument());
                 JPanel bodyPanel = createGroupBodyPanel(active);
                 List<CsvEditorPanel> groupPanels = filterPanelsByFileName(entry.getValue());
                 if (isCsvFileNameFilterActive() && groupPanels.isEmpty()) {
@@ -590,6 +591,7 @@ public class CsvStackPanel extends JScrollPane {
             revalidate();
             repaint();
             refreshOpenTableSizesLater();
+            initializeDisplayedPanelSynchronizationLater();
         } finally {
             rebuildingContentPanel = false;
         }
@@ -667,9 +669,40 @@ public class CsvStackPanel extends JScrollPane {
         }
     }
 
+    private void initializeDisplayedPanelSynchronizationLater() {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                initializeDisplayedPanelSynchronization();
+            }
+        });
+    }
+
+    private void initializeDisplayedPanelSynchronization() {
+        List<CsvEditorPanel> displayedPanels = getDisplayedPanels();
+        if (!canSynchronizeDisplayedPanels(displayedPanels, null)) {
+            return;
+        }
+        CsvEditorPanel sourcePanel = displayedPanels.get(0);
+        int[] widths = sourcePanel.getTableColumnWidths();
+        int scrollValue = sourcePanel.getTableHorizontalScrollValue();
+        for (int i = 1; i < displayedPanels.size(); i++) {
+            CsvEditorPanel panel = displayedPanels.get(i);
+            panel.setTableColumnWidths(widths);
+            panel.setTableHorizontalScrollValue(scrollValue);
+        }
+    }
+
     private boolean canSynchronizeDisplayedPanels(CsvEditorPanel sourcePanel) {
         List<CsvEditorPanel> displayedPanels = getDisplayedPanels();
-        if (sourcePanel == null || displayedPanels.size() <= 1 || !displayedPanels.contains(sourcePanel)) {
+        return canSynchronizeDisplayedPanels(displayedPanels, sourcePanel);
+    }
+
+    private boolean canSynchronizeDisplayedPanels(List<CsvEditorPanel> displayedPanels, CsvEditorPanel sourcePanel) {
+        if (displayedPanels == null || displayedPanels.size() <= 1) {
+            return false;
+        }
+        if (sourcePanel != null && !displayedPanels.contains(sourcePanel)) {
             return false;
         }
         String fileName = null;
@@ -737,7 +770,7 @@ public class CsvStackPanel extends JScrollPane {
         return sectionPanel;
     }
 
-    private JPanel createGroupPanel(String groupKey, boolean active) {
+    private JPanel createGroupPanel(String groupKey, boolean active, CsvDocument representativeDocument) {
         JPanel groupPanel = new JPanel() {
             @Override
             public Dimension getMaximumSize() {
@@ -753,7 +786,7 @@ public class CsvStackPanel extends JScrollPane {
                 BorderFactory.createCompoundBorder(
                         BorderFactory.createLineBorder(active ? DISPLAYED_GROUP_BORDER : getInactiveGroupBorder(), 1),
                         BorderFactory.createEmptyBorder(4, 4, 0, 4))));
-        groupPanel.add(createGroupHeaderPanel(groupKey, active), BorderLayout.NORTH);
+        groupPanel.add(createGroupHeaderPanel(groupKey, active, representativeDocument), BorderLayout.NORTH);
         return groupPanel;
     }
 
@@ -765,10 +798,15 @@ public class CsvStackPanel extends JScrollPane {
         return bodyPanel;
     }
 
-    private JPanel createGroupHeaderPanel(final String groupKey, boolean active) {
-        JPanel headerPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+    private JPanel createGroupHeaderPanel(final String groupKey, boolean active, CsvDocument representativeDocument) {
+        JPanel headerPanel = new JPanel(new BorderLayout(4, 0));
         headerPanel.setBackground(getPanelBackground());
         JLabel groupNameLabel = createGroupHeaderLabel(groupKey, active);
+        JLabel parentPathLabel = createGroupParentPathLabel(representativeDocument);
+        JPanel titlePanel = new JPanel(new BorderLayout(4, 0));
+        titlePanel.setBackground(getPanelBackground());
+        JPanel namePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        namePanel.setBackground(getPanelBackground());
         final JButton collapseButton = createGroupHeaderButton(
                 collapsedGroupKeys.contains(groupKey) ? "▸" : "▾");
         collapseButton.setToolTipText("このデータグループを折りたたみ/展開します。");
@@ -786,15 +824,18 @@ public class CsvStackPanel extends JScrollPane {
         closeGroupButton.setToolTipText("このデータグループ内のCSVをすべて閉じます。");
         closeGroupButton.addActionListener(e -> closeGroup(groupKey));
 
-        headerPanel.add(collapseButton);
-        headerPanel.add(groupNameLabel);
-        headerPanel.add(closeGroupButton);
+        namePanel.add(collapseButton);
+        namePanel.add(groupNameLabel);
+        titlePanel.add(namePanel, BorderLayout.WEST);
+        titlePanel.add(parentPathLabel, BorderLayout.CENTER);
+        headerPanel.add(titlePanel, BorderLayout.CENTER);
+        headerPanel.add(closeGroupButton, BorderLayout.EAST);
         return headerPanel;
     }
 
     private JLabel createGroupHeaderLabel(String groupKey, boolean active) {
         final int maxLabelWidth = 180;
-        JLabel label = new JLabel(groupKey == null ? "" : groupKey);
+        JLabel label = new JLabel(getGroupHeaderDisplayName(groupKey));
         label.setToolTipText(groupKey);
         label.setHorizontalAlignment(JLabel.LEFT);
         label.setFont(label.getFont().deriveFont(active ? Font.BOLD : Font.PLAIN, 12f));
@@ -806,6 +847,47 @@ public class CsvStackPanel extends JScrollPane {
         label.setPreferredSize(labelSize);
         label.setMaximumSize(labelSize);
         return label;
+    }
+
+    private JLabel createGroupParentPathLabel(CsvDocument representativeDocument) {
+        String parentPath = getGroupParentAbsolutePath(representativeDocument);
+        JLabel label = new JLabel(parentPath);
+        label.setToolTipText(parentPath);
+        label.setHorizontalAlignment(JLabel.LEFT);
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
+        label.setForeground(getSubtlePathTextColor());
+        label.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 0));
+        return label;
+    }
+
+    private Color getSubtlePathTextColor() {
+        Color foreground = UIManager.getColor("Label.foreground");
+        if (foreground == null) {
+            return Color.GRAY;
+        }
+        return new Color(
+                Math.min(255, foreground.getRed() + 90),
+                Math.min(255, foreground.getGreen() + 90),
+                Math.min(255, foreground.getBlue() + 90));
+    }
+
+    private String getGroupHeaderDisplayName(String groupKey) {
+        if (groupKey == null || groupKey.length() == 0) {
+            return "";
+        }
+        int separatorIndex = Math.max(groupKey.lastIndexOf('\\'), groupKey.lastIndexOf('/'));
+        if (separatorIndex < 0 || separatorIndex == groupKey.length() - 1) {
+            return groupKey;
+        }
+        return groupKey.substring(separatorIndex + 1);
+    }
+
+    private String getGroupParentAbsolutePath(CsvDocument document) {
+        Path groupPath = getGroupAbsolutePath(document);
+        if (groupPath == null || groupPath.getParent() == null) {
+            return "";
+        }
+        return groupPath.getParent().toString();
     }
 
     private JButton createGroupHeaderButton(String text) {

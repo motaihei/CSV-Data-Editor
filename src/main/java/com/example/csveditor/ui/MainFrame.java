@@ -417,7 +417,7 @@ public class MainFrame extends JFrame {
     }
 
     private JPanel createCloseAllCsvToolBarGroup() {
-        JButton closeAllCsvButton = createCompactToolBarButton("全て閉じる");
+        JButton closeAllCsvButton = createCompactToolBarButton("全データを閉じる");
         closeAllCsvButton.setToolTipText("表示中のCSVパネルをすべて閉じます。");
         closeAllCsvButton.addActionListener(e -> closeAllOpenCsvPanels());
         return createToolBarGroup(closeAllCsvButton);

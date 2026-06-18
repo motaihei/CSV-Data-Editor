@@ -228,6 +228,88 @@ public class CsvStackPanelTest {
         assertEquals(originalWidth, displayedPanels.get(1).getTableColumnWidth(2));
     }
 
+    @Test
+    public void initializesSynchronizationFromFirstDisplayedPanelWhenFilterStartsSync() throws Exception {
+        final CsvStackPanel stackPanel = createStackPanel(true);
+        runOnEdt(new Runnable() {
+            @Override
+            public void run() {
+                stackPanel.setSize(420, 600);
+                stackPanel.addOrFocusDocuments(Arrays.asList(
+                        document("GroupA", "target.csv", 8),
+                        document("GroupA", "other.csv", 5),
+                        document("GroupB", "target.csv", 8)));
+                stackPanel.applyColumnWidthToOpenPanels(160);
+                stackPanel.refreshOpenTableSizes();
+                stackPanel.doLayout();
+            }
+        });
+
+        final List<CsvEditorPanel> openPanels = stackPanel.getOpenPanels();
+        runOnEdt(new Runnable() {
+            @Override
+            public void run() {
+                CsvEditorPanel firstTargetPanel = openPanels.get(0);
+                CsvEditorPanel secondTargetPanel = openPanels.get(2);
+                firstTargetPanel.getTableColumn(2).setPreferredWidth(240);
+                firstTargetPanel.getTableColumn(2).setWidth(240);
+                firstTargetPanel.getTableHorizontalScrollBar().setValue(180);
+                secondTargetPanel.getTableColumn(2).setPreferredWidth(90);
+                secondTargetPanel.getTableColumn(2).setWidth(90);
+                secondTargetPanel.getTableHorizontalScrollBar().setValue(0);
+                stackPanel.setCsvFileNameFilter("target.csv");
+            }
+        });
+        flushEdt();
+
+        final List<CsvEditorPanel> displayedPanels = getDisplayedPanels(stackPanel);
+        assertEquals(2, displayedPanels.size());
+        assertEquals(240, displayedPanels.get(0).getTableColumnWidth(2));
+        assertEquals(240, displayedPanels.get(1).getTableColumnWidth(2));
+        assertEquals(displayedPanels.get(0).getTableHorizontalScrollValue(),
+                displayedPanels.get(1).getTableHorizontalScrollValue());
+    }
+
+    @Test
+    public void doesNotInitializeSynchronizationWhenDisplayedColumnCountsDiffer() throws Exception {
+        final CsvStackPanel stackPanel = createStackPanel(true);
+        runOnEdt(new Runnable() {
+            @Override
+            public void run() {
+                stackPanel.setSize(420, 600);
+                stackPanel.addOrFocusDocuments(Arrays.asList(
+                        document("GroupA", "target.csv", 8),
+                        document("GroupB", "target.csv", 5)));
+                stackPanel.applyColumnWidthToOpenPanels(160);
+                stackPanel.refreshOpenTableSizes();
+                stackPanel.doLayout();
+            }
+        });
+
+        final List<CsvEditorPanel> openPanels = stackPanel.getOpenPanels();
+        runOnEdt(new Runnable() {
+            @Override
+            public void run() {
+                CsvEditorPanel firstTargetPanel = openPanels.get(0);
+                CsvEditorPanel secondTargetPanel = openPanels.get(1);
+                firstTargetPanel.getTableColumn(2).setPreferredWidth(240);
+                firstTargetPanel.getTableColumn(2).setWidth(240);
+                firstTargetPanel.getTableHorizontalScrollBar().setValue(180);
+                secondTargetPanel.getTableColumn(2).setPreferredWidth(90);
+                secondTargetPanel.getTableColumn(2).setWidth(90);
+                secondTargetPanel.getTableHorizontalScrollBar().setValue(0);
+                stackPanel.setCsvFileNameFilter("target.csv");
+            }
+        });
+        flushEdt();
+
+        final List<CsvEditorPanel> displayedPanels = getDisplayedPanels(stackPanel);
+        assertEquals(2, displayedPanels.size());
+        assertEquals(240, displayedPanels.get(0).getTableColumnWidth(2));
+        assertEquals(90, displayedPanels.get(1).getTableColumnWidth(2));
+        assertEquals(0, displayedPanels.get(1).getTableHorizontalScrollValue());
+    }
+
     private static CsvStackPanel createStackPanel(boolean dataGroupingEnabled) {
         CsvStackPanel stackPanel = new CsvStackPanel(new CsvDocumentService(),
                 new DataGroupKeyResolver(DataGroupingConfig.pathSegmentLevelConfig(1)));
@@ -316,5 +398,13 @@ public class CsvStackPanelTest {
         } else {
             SwingUtilities.invokeAndWait(runnable);
         }
+    }
+
+    private static void flushEdt() throws Exception {
+        runOnEdt(new Runnable() {
+            @Override
+            public void run() {
+            }
+        });
     }
 }
