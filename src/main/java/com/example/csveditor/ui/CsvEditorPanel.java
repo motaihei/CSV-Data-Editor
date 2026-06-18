@@ -29,6 +29,8 @@ import javax.swing.event.TableModelEvent;
 import javax.swing.event.TableModelListener;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
+import javax.swing.event.TableColumnModelEvent;
+import javax.swing.event.TableColumnModelListener;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -83,6 +85,14 @@ public final class CsvEditorPanel extends JPanel {
         void tableSelectionChanged(CsvEditorPanel panel);
     }
 
+    public interface HorizontalScrollListener {
+        void horizontalScrollChanged(CsvEditorPanel panel, int value);
+    }
+
+    public interface ColumnWidthListener {
+        void columnWidthsChanged(CsvEditorPanel panel, int[] widths);
+    }
+
     private final CsvDocumentService documentService;
     private static final int MAX_UNDO_HISTORY = 5;
     private static final int OPEN_FOLDER_BUTTON_WIDTH = 112;
@@ -132,6 +142,8 @@ public final class CsvEditorPanel extends JPanel {
     private CloseHandler closeHandler;
     private MoveRequestListener moveRequestListener;
     private TableSelectionListener tableSelectionListener;
+    private HorizontalScrollListener horizontalScrollListener;
+    private ColumnWidthListener columnWidthListener;
     private List<List<String>> copiedRows;
     private int popupModelRow = -1;
     private int popupModelColumn = -1;
@@ -144,6 +156,8 @@ public final class CsvEditorPanel extends JPanel {
     private boolean canMoveDown = true;
     private boolean collapsed;
     private boolean suppressSelectionNotification;
+    private boolean suppressHorizontalScrollNotification;
+    private boolean suppressColumnWidthNotification;
     private String rowClipboardDelimiter = DEFAULT_ROW_CLIPBOARD_DELIMITER;
 
     public CsvEditorPanel(CsvDocument document, CsvDocumentService documentService) {
@@ -208,6 +222,87 @@ public final class CsvEditorPanel extends JPanel {
 
     public void setTableSelectionListener(TableSelectionListener tableSelectionListener) {
         this.tableSelectionListener = tableSelectionListener;
+    }
+
+    public void setHorizontalScrollListener(HorizontalScrollListener horizontalScrollListener) {
+        this.horizontalScrollListener = horizontalScrollListener;
+    }
+
+    public void setColumnWidthListener(ColumnWidthListener columnWidthListener) {
+        this.columnWidthListener = columnWidthListener;
+    }
+
+    public int getTableHorizontalScrollValue() {
+        JScrollBar horizontalBar = getTableHorizontalScrollBar();
+        return horizontalBar == null ? 0 : horizontalBar.getValue();
+    }
+
+    int getTableHorizontalScrollMaximumValue() {
+        JScrollBar horizontalBar = getTableHorizontalScrollBar();
+        if (horizontalBar == null) {
+            return 0;
+        }
+        return Math.max(horizontalBar.getMinimum(), horizontalBar.getMaximum() - horizontalBar.getVisibleAmount());
+    }
+
+    public void setTableHorizontalScrollValue(int value) {
+        JScrollBar horizontalBar = getTableHorizontalScrollBar();
+        if (horizontalBar == null) {
+            return;
+        }
+        int maximum = getTableHorizontalScrollMaximumValue();
+        int target = Math.max(horizontalBar.getMinimum(), Math.min(maximum, value));
+        if (horizontalBar.getValue() == target) {
+            return;
+        }
+        suppressHorizontalScrollNotification = true;
+        try {
+            horizontalBar.setValue(target);
+        } finally {
+            suppressHorizontalScrollNotification = false;
+        }
+    }
+
+    public int[] getTableColumnWidths() {
+        int columnCount = table == null ? 0 : table.getColumnModel().getColumnCount();
+        int[] widths = new int[columnCount];
+        for (int i = 0; i < columnCount; i++) {
+            widths[i] = table.getColumnModel().getColumn(i).getPreferredWidth();
+        }
+        return widths;
+    }
+
+    int getTableColumnWidth(int columnIndex) {
+        if (table == null || columnIndex < 0 || columnIndex >= table.getColumnModel().getColumnCount()) {
+            return 0;
+        }
+        return table.getColumnModel().getColumn(columnIndex).getPreferredWidth();
+    }
+
+    TableColumn getTableColumn(int columnIndex) {
+        if (table == null || columnIndex < 0 || columnIndex >= table.getColumnModel().getColumnCount()) {
+            return null;
+        }
+        return table.getColumnModel().getColumn(columnIndex);
+    }
+
+    public void setTableColumnWidths(int[] widths) {
+        if (widths == null || table == null || widths.length != table.getColumnModel().getColumnCount()) {
+            return;
+        }
+        suppressColumnWidthNotification = true;
+        try {
+            for (int i = 0; i < widths.length; i++) {
+                int width = Math.max(20, widths[i]);
+                TableColumn column = table.getColumnModel().getColumn(i);
+                column.setPreferredWidth(width);
+                column.setWidth(width);
+            }
+            tableWidth = calculateAutomaticTableWidth();
+            updateTableScrollPaneSize();
+        } finally {
+            suppressColumnWidthNotification = false;
+        }
     }
 
     public void clearTableSelection() {
@@ -512,6 +607,7 @@ public final class CsvEditorPanel extends JPanel {
         configureTableColumns();
         updatePivotVisualState();
         installHeaderAutoResizeHandler();
+        installColumnWidthNotification();
         installRowPopupMenu();
         installTableSelectionNotification();
         installEditorKeyBindings();
@@ -521,6 +617,7 @@ public final class CsvEditorPanel extends JPanel {
         tableScrollPane.setViewportBorder(null);
         tableScrollPane.setWheelScrollingEnabled(false);
         configureTableHorizontalScrollBar(tableScrollPane);
+        installHorizontalScrollNotification();
         installTableResizeHandler();
         installTableMouseWheelForwarding();
         tableWidth = calculateAutomaticTableWidth();
@@ -1189,6 +1286,23 @@ public final class CsvEditorPanel extends JPanel {
         horizontalBar.setMaximumSize(new Dimension(maximumSize.width, TABLE_HORIZONTAL_SCROLL_BAR_HEIGHT));
     }
 
+    private void installHorizontalScrollNotification() {
+        JScrollBar horizontalBar = getTableHorizontalScrollBar();
+        if (horizontalBar == null) {
+            return;
+        }
+        horizontalBar.addAdjustmentListener(event -> {
+            if (suppressHorizontalScrollNotification || horizontalScrollListener == null) {
+                return;
+            }
+            horizontalScrollListener.horizontalScrollChanged(this, event.getValue());
+        });
+    }
+
+    JScrollBar getTableHorizontalScrollBar() {
+        return tableScrollPane == null ? null : tableScrollPane.getHorizontalScrollBar();
+    }
+
     private void installTableResizeHandler() {
         MouseAdapter resizeHandler = new MouseAdapter() {
             @Override
@@ -1542,6 +1656,38 @@ public final class CsvEditorPanel extends JPanel {
                     return;
                 }
                 resizeColumnToHeader(column);
+            }
+        });
+    }
+
+    private void installColumnWidthNotification() {
+        table.getColumnModel().addColumnModelListener(new TableColumnModelListener() {
+            @Override
+            public void columnAdded(TableColumnModelEvent event) {
+            }
+
+            @Override
+            public void columnRemoved(TableColumnModelEvent event) {
+            }
+
+            @Override
+            public void columnMoved(TableColumnModelEvent event) {
+            }
+
+            @Override
+            public void columnMarginChanged(javax.swing.event.ChangeEvent event) {
+                if (suppressColumnWidthNotification) {
+                    return;
+                }
+                tableWidth = calculateAutomaticTableWidth();
+                updateTableScrollPaneSize();
+                if (columnWidthListener != null) {
+                    columnWidthListener.columnWidthsChanged(CsvEditorPanel.this, getTableColumnWidths());
+                }
+            }
+
+            @Override
+            public void columnSelectionChanged(ListSelectionEvent event) {
             }
         });
     }

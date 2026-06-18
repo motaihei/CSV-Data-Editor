@@ -172,6 +172,18 @@ public class CsvStackPanel extends JScrollPane {
                 clearOtherTableSelections(selectedPanel);
             }
         });
+        panel.setHorizontalScrollListener(new CsvEditorPanel.HorizontalScrollListener() {
+            @Override
+            public void horizontalScrollChanged(CsvEditorPanel scrolledPanel, int value) {
+                synchronizeVisibleHorizontalScroll(scrolledPanel, value);
+            }
+        });
+        panel.setColumnWidthListener(new CsvEditorPanel.ColumnWidthListener() {
+            @Override
+            public void columnWidthsChanged(CsvEditorPanel resizedPanel, int[] widths) {
+                synchronizeVisibleColumnWidths(resizedPanel, widths);
+            }
+        });
         return panel;
     }
 
@@ -616,6 +628,10 @@ public class CsvStackPanel extends JScrollPane {
         return filteredPanels;
     }
 
+    private List<CsvEditorPanel> getDisplayedPanels() {
+        return filterPanelsByFileName(new ArrayList<CsvEditorPanel>(panelsByPath.values()));
+    }
+
     private boolean matchesCsvFileNameFilter(CsvEditorPanel panel) {
         if (!isCsvFileNameFilterActive()) {
             return true;
@@ -627,6 +643,62 @@ public class CsvStackPanel extends JScrollPane {
 
     private boolean isCsvFileNameFilterActive() {
         return csvFileNameFilter.length() > 0;
+    }
+
+    private void synchronizeVisibleHorizontalScroll(CsvEditorPanel sourcePanel, int value) {
+        if (!canSynchronizeDisplayedPanels(sourcePanel)) {
+            return;
+        }
+        for (CsvEditorPanel panel : getDisplayedPanels()) {
+            if (panel != sourcePanel) {
+                panel.setTableHorizontalScrollValue(value);
+            }
+        }
+    }
+
+    private void synchronizeVisibleColumnWidths(CsvEditorPanel sourcePanel, int[] widths) {
+        if (widths == null || !canSynchronizeDisplayedPanels(sourcePanel)) {
+            return;
+        }
+        for (CsvEditorPanel panel : getDisplayedPanels()) {
+            if (panel != sourcePanel) {
+                panel.setTableColumnWidths(widths);
+            }
+        }
+    }
+
+    private boolean canSynchronizeDisplayedPanels(CsvEditorPanel sourcePanel) {
+        List<CsvEditorPanel> displayedPanels = getDisplayedPanels();
+        if (sourcePanel == null || displayedPanels.size() <= 1 || !displayedPanels.contains(sourcePanel)) {
+            return false;
+        }
+        String fileName = null;
+        int columnCount = -1;
+        int tableColumnCount = -1;
+        for (CsvEditorPanel panel : displayedPanels) {
+            CsvDocument document = panel.getDocument();
+            if (document == null) {
+                return false;
+            }
+            String panelFileName = document.getFileName();
+            if (fileName == null) {
+                fileName = panelFileName;
+            } else if (panelFileName == null || !fileName.equals(panelFileName)) {
+                return false;
+            }
+            if (columnCount < 0) {
+                columnCount = document.getColumnCount();
+            } else if (columnCount != document.getColumnCount()) {
+                return false;
+            }
+            int panelTableColumnCount = panel.getTableColumnWidths().length;
+            if (tableColumnCount < 0) {
+                tableColumnCount = panelTableColumnCount;
+            } else if (tableColumnCount != panelTableColumnCount) {
+                return false;
+            }
+        }
+        return fileName != null && columnCount >= 0 && tableColumnCount >= 0;
     }
 
     private static String normalizeFilterText(String filterText) {
